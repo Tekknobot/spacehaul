@@ -39,7 +39,7 @@ func _update_active_mecha_labels() -> void:
 	var animation_name := mecha_manager.get_active_animation_name().to_upper()
 	animation_label.text = "MECHA %s  ANIMATION %s" % [mecha_name, animation_name]
 	speed_label.text = "SPEED      %03d" % int(round(mecha_manager.get_active_speed()))
-	status_label.text = "ACTIVE %s  TAB SWITCH  LEFT MOUSE ABILITY" % mecha_name
+	status_label.text = "ACTIVE %s  TAB SWITCH  LMB SPECIAL  RMB + LMB ALT" % mecha_name
 
 func _on_active_mecha_changed(_mecha: MechaController) -> void:
 	_update_active_mecha_labels()

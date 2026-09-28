@@ -2,11 +2,9 @@ extends CharacterBody2D
 class_name MechaController
 
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
-const ProjectileScript = preload("res://Scripts/projectile.gd")
-const AbilityEffectScript = preload("res://Scripts/ability_effect.gd")
+const SpecialAbilityScript = preload("res://Scripts/special_ability_effect.gd")
 
 const GAMEPAD_AIM_DEADZONE := 0.28
-const PROJECTILE_SPAWN_OFFSET := 10.0
 
 @export var mecha_id := "M1"
 @export var player_walk_speed := 92.0
@@ -34,6 +32,8 @@ var _rng := RandomNumberGenerator.new()
 var _attack_fire_frame := 0
 var _attack_projectile_pending := false
 var _attack_direction := Vector2.RIGHT
+var _attack_target := Vector2.ZERO
+var _attack_alternate := false
 
 func _ready() -> void:
 	InputSetupScript.ensure_actions()
@@ -113,6 +113,8 @@ func _process_player(delta: float) -> void:
 	var attack_direction := _get_attack_direction()
 
 	if Input.is_action_just_pressed("shoot") and not attacking:
+		_attack_target = _get_attack_target(attack_direction)
+		_attack_alternate = Input.is_action_pressed("aim")
 		_start_attack(attack_direction, true)
 
 	if attacking:
@@ -208,8 +210,7 @@ func _on_frame_changed() -> void:
 		return
 	if animated_sprite.frame >= _attack_fire_frame:
 		_attack_projectile_pending = false
-		_spawn_ability_effect(_attack_direction)
-		_fire_projectile(_attack_direction)
+		_spawn_special_ability(_attack_direction)
 
 func _on_animation_finished() -> void:
 	if animated_sprite.animation == &"attack":
@@ -223,23 +224,28 @@ func _on_animation_finished() -> void:
 		else:
 			_set_ai_idle()
 
-func _fire_projectile(direction: Vector2) -> void:
-	var projectile := ProjectileScript.new() as SpacehaulProjectile
+func _spawn_special_ability(direction: Vector2) -> void:
 	var root := get_tree().current_scene
 	if root == null:
 		root = get_parent()
-	root.add_child(projectile)
-	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction * PROJECTILE_SPAWN_OFFSET
-	projectile.setup(muzzle_origin, direction, get_rid(), mecha_id)
-
-func _spawn_ability_effect(direction: Vector2) -> void:
-	var root := get_tree().current_scene
-	if root == null:
-		root = get_parent()
-	var effect := AbilityEffectScript.new() as PixelAbilityEffect
-	var origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
-	effect.setup(mecha_id, origin, direction)
+	var effect := SpecialAbilityScript.new() as SpacehaulSpecialAbility
 	root.add_child(effect)
+	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
+	effect.setup(mecha_id, muzzle_origin, _attack_target, get_rid(), _attack_alternate)
+
+func _get_attack_target(attack_dir: Vector2) -> Vector2:
+	var joy_id := _first_connected_joypad()
+	if joy_id >= 0:
+		var stick := Vector2(
+			Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_X),
+			Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_Y)
+		)
+		if stick.length() >= GAMEPAD_AIM_DEADZONE:
+			return global_position + Vector2(0.0, -18.0) + stick.normalized() * 220.0
+	var mouse_target := get_global_mouse_position()
+	if mouse_target.distance_squared_to(global_position) > 4.0:
+		return mouse_target
+	return global_position + Vector2(0.0, -18.0) + attack_dir.normalized() * 180.0
 
 func _get_attack_direction() -> Vector2:
 	var joy_id := _first_connected_joypad()
