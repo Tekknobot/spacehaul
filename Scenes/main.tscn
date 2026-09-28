@@ -1,0 +1,251 @@
+[gd_scene format=3 uid="uid://lsscumxb33dg"]
+
+[ext_resource type="Script" uid="uid://cqsyak3i0rpnj" path="res://Scripts/test_world.gd" id="1_world"]
+[ext_resource type="Script" uid="uid://ytlcptyd6g3f" path="res://Scripts/procedural_deck.gd" id="2_deck"]
+[ext_resource type="Script" path="res://Scripts/mecha_manager.gd" id="3_manager"]
+[ext_resource type="FontFile" path="res://Fonts/mago1.ttf" id="4_mago1"]
+[ext_resource type="FontFile" path="res://Fonts/mago2.ttf" id="5_mago2"]
+[ext_resource type="FontFile" path="res://Fonts/mago3.ttf" id="6_mago3"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_top"]
+bg_color = Color(0.025, 0.035, 0.05, 0.91)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.19, 0.27, 0.35, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_controls"]
+bg_color = Color(0.025, 0.035, 0.05, 0.86)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.17, 0.22, 0.29, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_status"]
+bg_color = Color(0.03, 0.04, 0.055, 0.92)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.15, 0.48, 0.58, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_banner"]
+bg_color = Color(0.015, 0.02, 0.03, 0.88)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.67, 0.76, 0.9)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[node name="CharacterTestDeck" type="Node2D" unique_id=960116902]
+script = ExtResource("1_world")
+
+[node name="ProceduralDeck" type="Node2D" parent="." unique_id=1973192649]
+script = ExtResource("2_deck")
+
+[node name="CollisionRoot" type="Node2D" parent="ProceduralDeck" unique_id=1472454552]
+
+[node name="HazardRoot" type="Node2D" parent="ProceduralDeck" unique_id=1261042010]
+
+[node name="MechaManager" type="Node2D" parent="."]
+script = ExtResource("3_manager")
+
+[node name="HUD" type="CanvasLayer" parent="." unique_id=74396757]
+
+[node name="Title" type="Label" parent="HUD" unique_id=312857373]
+offset_left = 14.0
+offset_top = 8.0
+offset_right = 310.0
+offset_bottom = 46.0
+theme_override_colors/font_color = Color(0.49, 0.9, 0.98, 1)
+theme_override_fonts/font = ExtResource("6_mago3")
+theme_override_font_sizes/font_size = 32
+text = "SPACEHAUL"
+
+[node name="Subtitle" type="Label" parent="HUD"]
+offset_left = 15.0
+offset_top = 43.0
+offset_right = 310.0
+offset_bottom = 64.0
+theme_override_colors/font_color = Color(0.52, 0.62, 0.7, 1)
+theme_override_fonts/font = ExtResource("4_mago1")
+theme_override_font_sizes/font_size = 16
+text = "MECHA TEST DECK"
+
+[node name="TopLeft" type="MarginContainer" parent="HUD" unique_id=1692617658]
+offset_left = 12.0
+offset_top = 72.0
+offset_right = 285.0
+offset_bottom = 172.0
+
+[node name="Panel" type="PanelContainer" parent="HUD/TopLeft" unique_id=997944449]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBox_top")
+
+[node name="Margin" type="MarginContainer" parent="HUD/TopLeft/Panel" unique_id=489783210]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="HUD/TopLeft/Panel/Margin" unique_id=862852521]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Animation" type="Label" parent="HUD/TopLeft/Panel/Margin/VBox" unique_id=2025562959]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.83, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("4_mago1")
+theme_override_font_sizes/font_size = 16
+text = "ANIMATION  IDLE"
+
+[node name="Speed" type="Label" parent="HUD/TopLeft/Panel/Margin/VBox" unique_id=185055590]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.66, 0.75, 0.82, 1)
+theme_override_fonts/font = ExtResource("4_mago1")
+theme_override_font_sizes/font_size = 16
+text = "SPEED      000"
+
+[node name="Seed" type="Label" parent="HUD/TopLeft/Panel/Margin/VBox" unique_id=805859110]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.66, 0.75, 0.82, 1)
+theme_override_fonts/font = ExtResource("4_mago1")
+theme_override_font_sizes/font_size = 16
+text = "DECK SEED  0"
+
+[node name="Controls" type="PanelContainer" parent="HUD" unique_id=393475320]
+offset_left = 354.0
+offset_top = 12.0
+offset_right = 628.0
+offset_bottom = 296.0
+theme_override_styles/panel = SubResource("StyleBox_controls")
+
+[node name="Margin" type="MarginContainer" parent="HUD/Controls" unique_id=1492944686]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="HUD/Controls/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Heading" type="Label" parent="HUD/Controls/Margin/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.49, 0.9, 0.98, 1)
+theme_override_fonts/font = ExtResource("5_mago2")
+theme_override_font_sizes/font_size = 32
+text = "CONTROLS"
+
+[node name="Text" type="Label" parent="HUD/Controls/Margin/VBox" unique_id=192834213]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.84, 0.89, 1)
+theme_override_fonts/font = ExtResource("4_mago1")
+theme_override_font_sizes/font_size = 16
+text = "WASD  LEFT STICK  MOVE\nSHIFT  LB  RUN\nLEFT MOUSE  RT  ATTACK\nTAB  Y  SWITCH MECHA\nG  RB  NEW DECK\nU  UI TOGGLE"
+
+[node name="BottomCenter" type="CenterContainer" parent="HUD" unique_id=5209970]
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -56.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="StatusPanel" type="PanelContainer" parent="HUD/BottomCenter" unique_id=1358014635]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBox_status")
+
+[node name="Margin" type="MarginContainer" parent="HUD/BottomCenter/StatusPanel" unique_id=1868450227]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 7
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 7
+
+[node name="Status" type="Label" parent="HUD/BottomCenter/StatusPanel/Margin" unique_id=252885061]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.92, 0.98, 1)
+theme_override_fonts/font = ExtResource("4_mago1")
+theme_override_font_sizes/font_size = 16
+text = "TEST DECK ONLINE"
+
+[node name="DeckBanner" type="CenterContainer" parent="HUD"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -72.0
+offset_bottom = -72.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Panel" type="PanelContainer" parent="HUD/DeckBanner"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBox_banner")
+
+[node name="Margin" type="MarginContainer" parent="HUD/DeckBanner/Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 8
+
+[node name="Text" type="Label" parent="HUD/DeckBanner/Panel/Margin"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.92, 0.98, 1)
+theme_override_fonts/font = ExtResource("5_mago2")
+theme_override_font_sizes/font_size = 48
+text = "DECK GENERATED"
+horizontal_alignment = 1
+
+[node name="Intro" type="CenterContainer" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="VBox" type="VBoxContainer" parent="HUD/Intro"]
+layout_mode = 2
+theme_override_constants/separation = 4
+alignment = 1
+
+[node name="Title" type="Label" parent="HUD/Intro/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.72, 0.95, 1, 1)
+theme_override_fonts/font = ExtResource("6_mago3")
+theme_override_font_sizes/font_size = 64
+text = "SPACEHAUL"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="HUD/Intro/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.49, 0.9, 0.98, 1)
+theme_override_fonts/font = ExtResource("5_mago2")
+theme_override_font_sizes/font_size = 32
+text = "MECHA TEST DECK"
+horizontal_alignment = 1
