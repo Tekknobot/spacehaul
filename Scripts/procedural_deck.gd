@@ -1,6 +1,28 @@
 extends Node2D
 class_name ProceduralDeck
 
+const FLOOR_BASE_TEXTURE = preload("res://Sprites/Tiles/floor_base_01.png")
+const FLOOR_GRILL_TEXTURES: Array[Texture2D] = [
+	preload("res://Sprites/Tiles/floor_grill_01.png"),
+	preload("res://Sprites/Tiles/floor_grill_02.png"),
+	preload("res://Sprites/Tiles/floor_grill_03.png"),
+]
+const FLOOR_LIGHT_TEXTURE = preload("res://Sprites/Tiles/floor_light_01.png")
+const FLOOR_HAZARD_TEXTURE = preload("res://Sprites/Tiles/floor_hazardzone_01.png")
+const WALL_TEXTURES: Array[Texture2D] = [
+	preload("res://Sprites/Tiles/wall_1.png"),
+	preload("res://Sprites/Tiles/wall_2.png"),
+]
+
+enum FloorStyle {
+	BASE,
+	GRILL_1,
+	GRILL_2,
+	GRILL_3,
+	LIGHT,
+	HAZARD,
+}
+
 signal regenerated(new_spawn: Vector2, new_seed: int)
 
 @export var grid_width := 45
@@ -14,6 +36,9 @@ signal regenerated(new_spawn: Vector2, new_seed: int)
 @export var corridor_width := 4
 @export var extra_connection_count := 5
 @export var hazard_count := 10
+@export_range(0.0, 1.0, 0.01) var floor_grill_chance := 0.18
+@export_range(0.0, 1.0, 0.01) var floor_light_chance := 0.06
+@export_range(0.0, 1.0, 0.01) var wall_vent_chance := 0.10
 
 var seed_value := 0
 var spawn_position := Vector2.ZERO
@@ -24,6 +49,7 @@ var _walkable: Array[Array] = []
 var _rooms: Array[Rect2i] = []
 var _hazard_cells: Array[Vector2i] = []
 var _accent_cells: Array[Vector2i] = []
+var _floor_styles: Dictionary = {}
 var _start_cell := Vector2i.ONE
 var _wall_visual_root: Node2D
 
@@ -33,6 +59,7 @@ var _wall_visual_root: Node2D
 func _ready() -> void:
 	z_as_relative = false
 	z_index = -1000
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_wall_visual_root = get_node_or_null("WallVisualRoot") as Node2D
 	if _wall_visual_root == null:
 		_wall_visual_root = Node2D.new()
@@ -209,20 +236,38 @@ func _rect_center(rect: Rect2i) -> Vector2i:
 func _select_decorations() -> void:
 	_hazard_cells.clear()
 	_accent_cells.clear()
+	_floor_styles.clear()
+
 	var floor_cells: Array[Vector2i] = []
 	for x in range(1, grid_width - 1):
 		for y in range(1, grid_height - 1):
 			if not _walkable[x][y]:
 				continue
+
 			var cell := Vector2i(x, y)
+			var style := FloorStyle.BASE
+
+			# Keep the spawn room visually calm while the rest of the deck gains
+			# occasional vents, grilles and embedded light strips.
+			if cell != _start_cell:
+				var detail_roll := _rng.randf()
+				if detail_roll < floor_light_chance:
+					style = FloorStyle.LIGHT
+				elif detail_roll < floor_light_chance + floor_grill_chance:
+					style = FloorStyle.GRILL_1 + _rng.randi_range(0, 2)
+
+			_floor_styles[cell] = style
+			if style != FloorStyle.BASE:
+				_accent_cells.append(cell)
+
 			if Vector2(cell).distance_to(Vector2(_start_cell)) >= 7.0:
 				floor_cells.append(cell)
-			if _rng.randf() < 0.12:
-				_accent_cells.append(cell)
 
 	_shuffle_cells(floor_cells)
 	for i in range(mini(hazard_count, floor_cells.size())):
-		_hazard_cells.append(floor_cells[i])
+		var hazard_cell := floor_cells[i]
+		_hazard_cells.append(hazard_cell)
+		_floor_styles[hazard_cell] = FloorStyle.HAZARD
 
 func _rebuild_collisions() -> void:
 	_clear_children(collision_root)
@@ -266,51 +311,21 @@ func _create_wall_block(cell: Vector2i) -> void:
 	block.z_index = clampi(int(round(center.y)), -3000, 3000)
 	_wall_visual_root.add_child(block)
 
-	var base := _diamond_points_local(tile_width, tile_height)
-	var top := PackedVector2Array()
-	for point in base:
-		top.append(point - Vector2(0.0, wall_height))
+	# The supplied wall art is 64x64. Positioning the texture so its bottom
+	# lands on the bottom point of the 64x32 floor diamond preserves the same
+	# visual envelope as the original 30px procedural wall extrusion.
+	var texture := WALL_TEXTURES[1] if _rng.randf() < wall_vent_chance else WALL_TEXTURES[0]
+	var sprite := Sprite2D.new()
+	sprite.texture = texture
+	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	sprite.centered = true
+	sprite.position = Vector2(0.0, tile_height * 0.5 - texture.get_height() * 0.5)
 
-	# Cool teal slate walls contrast with the warm orange player and hazard colors.
-	var left_face := Polygon2D.new()
-	left_face.polygon = PackedVector2Array([top[3], top[2], base[2], base[3]])
-	left_face.color = Color("17333b")
-	block.add_child(left_face)
+	# Mirroring the common wall panel adds variation without resampling it.
+	if texture == WALL_TEXTURES[0] and _rng.randf() < 0.5:
+		sprite.flip_h = true
 
-	var right_face := Polygon2D.new()
-	right_face.polygon = PackedVector2Array([top[2], top[1], base[1], base[2]])
-	right_face.color = Color("10252d")
-	block.add_child(right_face)
-
-	var top_face := Polygon2D.new()
-	top_face.polygon = top
-	top_face.color = Color("29444c")
-	block.add_child(top_face)
-
-	var trim := Line2D.new()
-	trim.width = 1.0
-	trim.default_color = Color("6b8f97")
-	trim.antialiased = false
-	trim.points = PackedVector2Array([top[0], top[1], top[2], top[3], top[0]])
-	block.add_child(trim)
-
-	var lower_trim := Line2D.new()
-	lower_trim.width = 1.0
-	lower_trim.default_color = Color("081317")
-	lower_trim.antialiased = false
-	lower_trim.points = PackedVector2Array([base[3], base[2], base[1]])
-	block.add_child(lower_trim)
-
-	if _rng.randf() < 0.22:
-		var light := Polygon2D.new()
-		light.polygon = PackedVector2Array([
-			Vector2(-5.0, -wall_height + tile_height * 0.15),
-			Vector2(5.0, -wall_height + tile_height * 0.15),
-			Vector2(5.0, -wall_height + tile_height * 0.15 + 2.0),
-			Vector2(-5.0, -wall_height + tile_height * 0.15 + 2.0),
-		])
-		light.color = Color("58d9e8")
-		block.add_child(light)
+	block.add_child(sprite)
 
 func _rebuild_hazards() -> void:
 	_clear_children(hazard_root)
@@ -344,34 +359,42 @@ func _draw() -> void:
 			if _walkable[x][y]:
 				_draw_floor_cell(Vector2i(x, y))
 
+	# Hazards now use the authored hazard floor PNG. Keep a restrained
+	# one-pixel outline so dangerous cells still read clearly during play.
 	for cell in _hazard_cells:
-		_draw_hazard_cell(cell)
+		_draw_hazard_outline(cell)
 
 	_draw_spawn_pad()
 
 func _draw_floor_cell(cell: Vector2i) -> void:
 	var center := _cell_center(cell)
-	var points := _diamond_points(center, tile_width, tile_height)
-	var base_color := Color("141d22") if (cell.x + cell.y) % 2 == 0 else Color("11191e")
-	draw_colored_polygon(points, base_color)
-	draw_polyline(_closed_polygon(points), Color("2a3a40"), 1.0, false)
+	var style := int(_floor_styles.get(cell, FloorStyle.BASE))
+	var texture := _floor_texture_for_style(style)
+	if texture == null:
+		texture = FLOOR_BASE_TEXTURE
 
-	var inset := _diamond_points(center, tile_width - 8.0, tile_height - 4.0)
-	draw_polyline(_closed_polygon(inset), Color("0b1216"), 1.0, false)
+	var texture_size := texture.get_size()
+	draw_texture(texture, (center - texture_size * 0.5).round())
 
-	if cell in _accent_cells:
-		var left := center + Vector2(-10.0, 0.0)
-		var right := center + Vector2(10.0, 0.0)
-		draw_line(left, right, Color("3c555c"), 2.0, false)
-		draw_rect(Rect2(center + Vector2(-1.0, -1.0), Vector2(2.0, 2.0)), Color("78a3ac"))
+func _floor_texture_for_style(style: int) -> Texture2D:
+	match style:
+		FloorStyle.GRILL_1:
+			return FLOOR_GRILL_TEXTURES[0]
+		FloorStyle.GRILL_2:
+			return FLOOR_GRILL_TEXTURES[1]
+		FloorStyle.GRILL_3:
+			return FLOOR_GRILL_TEXTURES[2]
+		FloorStyle.LIGHT:
+			return FLOOR_LIGHT_TEXTURE
+		FloorStyle.HAZARD:
+			return FLOOR_HAZARD_TEXTURE
+		_:
+			return FLOOR_BASE_TEXTURE
 
-func _draw_hazard_cell(cell: Vector2i) -> void:
+func _draw_hazard_outline(cell: Vector2i) -> void:
 	var center := _cell_center(cell)
-	var points := _diamond_points(center, tile_width * 0.52, tile_height * 0.58)
-	draw_colored_polygon(points, Color("4b2119"))
-	draw_polyline(_closed_polygon(points), Color("f06a3d"), 2.0, false)
-	for offset in [-8.0, 0.0, 8.0]:
-		draw_line(center + Vector2(offset - 5.0, 3.0), center + Vector2(offset + 5.0, -3.0), Color("ffb24f"), 2.0, false)
+	var points := _diamond_points(center, tile_width - 2.0, tile_height - 1.0)
+	draw_polyline(_closed_polygon(points), Color(1.45, 0.56, 0.18, 0.72), 1.0, false)
 
 func _draw_spawn_pad() -> void:
 	var center := _cell_center(_start_cell)
