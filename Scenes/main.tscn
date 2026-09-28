@@ -162,7 +162,7 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.78, 0.84, 0.89, 1)
 theme_override_fonts/font = ExtResource("4_mago1")
 theme_override_font_sizes/font_size = 16
-text = "WASD  LEFT STICK  MOVE\nSHIFT  LB  RUN\nLEFT MOUSE  RT  ABILITY\nTAB  Y  SWITCH MECHA\nG  RB  NEW DECK\nU  UI TOGGLE"
+text = "WASD  LEFT STICK  MOVE\nSHIFT  LB  RUN\nLEFT MOUSE  RT  PRIMARY\nRIGHT MOUSE  LT  SECONDARY\nTAB  Y  SWITCH MECHA\nG  RB  NEW DECK\nU  UI TOGGLE"
 
 [node name="BottomCenter" type="CenterContainer" parent="HUD" unique_id=5209970]
 anchors_preset = 12

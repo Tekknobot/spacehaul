@@ -10,6 +10,7 @@ static func ensure_actions() -> void:
 	_add_action("dash")
 	_add_action("aim", 0.15)
 	_add_action("shoot", 0.15)
+	_add_action("secondary_ability", 0.15)
 	_add_action("interact")
 	_add_action("tool")
 	_add_action("pickup")
@@ -44,11 +45,13 @@ static func ensure_actions() -> void:
 	_add_key("dash", KEY_SPACE)
 	_add_joy_button("dash", JOY_BUTTON_A)
 
-	_add_mouse_button("aim", MOUSE_BUTTON_RIGHT)
-	_add_joy_axis("aim", JOY_AXIS_TRIGGER_LEFT, 1.0)
-
+	# Mouse aim is implicit from the cursor/right stick. Right click is now a
+	# standalone secondary-ability trigger rather than a modifier for LMB.
 	_add_mouse_button("shoot", MOUSE_BUTTON_LEFT)
 	_add_joy_axis("shoot", JOY_AXIS_TRIGGER_RIGHT, 1.0)
+
+	_add_mouse_button("secondary_ability", MOUSE_BUTTON_RIGHT)
+	_add_joy_axis("secondary_ability", JOY_AXIS_TRIGGER_LEFT, 1.0)
 
 	_add_key("interact", KEY_E)
 	_add_joy_button("interact", JOY_BUTTON_X)

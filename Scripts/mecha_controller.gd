@@ -112,10 +112,17 @@ func _process_player(delta: float) -> void:
 	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attack_direction := _get_attack_direction()
 
-	if Input.is_action_just_pressed("shoot") and not attacking:
-		_attack_target = _get_attack_target(attack_direction)
-		_attack_alternate = Input.is_action_pressed("aim")
-		_start_attack(attack_direction, true)
+	if not attacking:
+		# RMB / LT fires the alternate special directly. It no longer needs to
+		# be held together with the primary ability button.
+		if Input.is_action_just_pressed("secondary_ability") and _has_secondary_ability():
+			_attack_target = _get_attack_target(attack_direction)
+			_attack_alternate = true
+			_start_attack(attack_direction, true)
+		elif Input.is_action_just_pressed("shoot"):
+			_attack_target = _get_attack_target(attack_direction)
+			_attack_alternate = false
+			_start_attack(attack_direction, true)
 
 	if attacking:
 		velocity = velocity.move_toward(Vector2.ZERO, deceleration * delta)
@@ -175,6 +182,9 @@ func _begin_ai_patrol() -> void:
 	var angle := _rng.randf_range(0.0, TAU)
 	var radius := _rng.randf_range(18.0, ai_patrol_radius)
 	_ai_target = home_position + Vector2(cos(angle), sin(angle)) * radius
+
+func _has_secondary_ability() -> bool:
+	return mecha_id in ["M1", "M3", "S1", "S3", "R3", "R4"]
 
 func _start_attack(direction: Vector2, launch_projectile: bool) -> void:
 	if attacking:
