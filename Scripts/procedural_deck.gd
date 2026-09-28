@@ -602,3 +602,26 @@ func get_enemy_spawn_positions(count: int, minimum_distance_cells: int = 7) -> A
 		center += Vector2(local_rng.randf_range(-5.0, 5.0), local_rng.randf_range(-2.0, 2.0))
 		result.append(center.round())
 	return result
+
+func get_random_enemy_spawn_position(reference_world: Vector2, minimum_distance_cells: int, rng: RandomNumberGenerator) -> Vector2:
+	var reference_cell := world_to_cell(reference_world)
+	var candidates: Array[Vector2i] = []
+	var minimum_distance := float(maxi(1, minimum_distance_cells))
+	for x in range(1, grid_width - 1):
+		for y in range(1, grid_height - 1):
+			if not _walkable[x][y]:
+				continue
+			var cell := Vector2i(x, y)
+			if cell in _hazard_cells:
+				continue
+			if Vector2(cell).distance_to(Vector2(reference_cell)) < minimum_distance:
+				continue
+			candidates.append(cell)
+
+	if candidates.is_empty():
+		return Vector2.ZERO
+
+	var chosen := candidates[rng.randi_range(0, candidates.size() - 1)]
+	var center := _cell_center(chosen)
+	center += Vector2(rng.randf_range(-5.0, 5.0), rng.randf_range(-2.0, 2.0))
+	return center.round()

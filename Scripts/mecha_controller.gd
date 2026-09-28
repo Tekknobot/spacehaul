@@ -1,6 +1,9 @@
 extends CharacterBody2D
 class_name MechaController
 
+signal hull_changed(current_hull: int, max_hull: int)
+signal destroyed(mecha)
+
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
 const SpecialAbilityScript = preload("res://Scripts/special_ability_effect.gd")
 
@@ -9,57 +12,66 @@ const GAMEPAD_AIM_DEADZONE := 0.28
 @export var mecha_id := "M1"
 @export var player_walk_speed := 92.0
 @export var player_run_speed := 138.0
-@export var ai_move_speed := 54.0
 @export var acceleration := 720.0
 @export var deceleration := 920.0
-@export var ai_patrol_radius := 52.0
+@export var max_hull := 100
 
 @onready var animated_sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var camera: Camera2D = $Camera2D
 @onready var marker: Node2D = $ControlMarker
+@onready var collision_shape: CollisionShape2D = $CollisionShape2D
 
 var is_player_controlled := false
-var home_position := Vector2.ZERO
 var last_move_direction := Vector2.RIGHT
 var facing := 1
 var attacking := false
-var hurt_lock := 0.0
+var hull := 100
+var impact_scale := 1.0
+var secondary_unlocked := false
 
-var _ai_state := "idle"
-var _ai_timer := 0.0
-var _ai_target := Vector2.ZERO
 var _rng := RandomNumberGenerator.new()
 var _attack_fire_frame := 0
 var _attack_projectile_pending := false
 var _attack_direction := Vector2.RIGHT
 var _attack_target := Vector2.ZERO
 var _attack_alternate := false
+var _primary_cooldown := 0.75
+var _secondary_cooldown := 5.0
+var _primary_cooldown_left := 0.0
+var _secondary_cooldown_left := 0.0
+var _hurt_time := 0.0
+var _dead := false
+var _dissolve_material: ShaderMaterial
 
 func _ready() -> void:
 	add_to_group("mechas")
 	InputSetupScript.ensure_actions()
 	_rng.seed = mecha_id.hash() ^ int(Time.get_ticks_usec()) ^ int(get_instance_id())
+	_configure_survival_stats()
+	hull = max_hull
 	_build_sprite_frames()
 	animated_sprite.animation_finished.connect(_on_animation_finished)
 	animated_sprite.frame_changed.connect(_on_frame_changed)
 	animated_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	home_position = global_position
-	_ai_target = home_position
-	_set_ai_idle()
 	set_player_controlled(is_player_controlled)
 	_update_depth_order()
+	hull_changed.emit(hull, max_hull)
 
 func _physics_process(delta: float) -> void:
 	_update_depth_order()
-	if hurt_lock > 0.0:
-		hurt_lock = maxf(0.0, hurt_lock - delta)
-		if hurt_lock <= 0.0:
+	if _dead:
+		return
+
+	_primary_cooldown_left = maxf(0.0, _primary_cooldown_left - delta)
+	_secondary_cooldown_left = maxf(0.0, _secondary_cooldown_left - delta)
+
+	if _hurt_time > 0.0:
+		_hurt_time = maxf(0.0, _hurt_time - delta)
+		if _hurt_time <= 0.0:
 			animated_sprite.modulate = Color.WHITE
 
 	if is_player_controlled:
 		_process_player(delta)
-	else:
-		_process_ai(delta)
 
 func set_player_controlled(value: bool) -> void:
 	is_player_controlled = value
@@ -68,28 +80,30 @@ func set_player_controlled(value: bool) -> void:
 	camera.enabled = value
 	marker.visible = value
 	if value:
+		if not is_in_group("player_mecha"):
+			add_to_group("player_mecha")
 		attacking = false
 		_attack_projectile_pending = false
 		velocity = Vector2.ZERO
 		_play_if_needed("idle")
 	else:
-		home_position = global_position
-		_set_ai_idle()
-
-func set_ai_home(value: Vector2) -> void:
-	home_position = value
-	_ai_target = value
+		if is_in_group("player_mecha"):
+			remove_from_group("player_mecha")
+		velocity = Vector2.ZERO
 
 func teleport_to(value: Vector2) -> void:
 	global_position = value
-	home_position = value
-	_ai_target = value
 	velocity = Vector2.ZERO
 	attacking = false
 	_attack_projectile_pending = false
-	_set_ai_idle()
+	_primary_cooldown_left = minf(_primary_cooldown_left, 0.25)
+	_secondary_cooldown_left = minf(_secondary_cooldown_left, 0.5)
+	if not _dead:
+		_play_if_needed("idle")
 
 func get_animation_name() -> String:
+	if animated_sprite == null:
+		return ""
 	return String(animated_sprite.animation)
 
 func get_speed() -> float:
@@ -98,31 +112,89 @@ func get_speed() -> float:
 func get_display_name() -> String:
 	return mecha_id
 
-func take_hurt() -> void:
-	if hurt_lock > 0.0:
-		return
-	hurt_lock = 0.38
-	animated_sprite.modulate = Color(1.0, 0.52, 0.42, 1.0)
-	velocity *= 0.25
+func get_hull() -> int:
+	return hull
 
-func take_projectile_hit(direction: Vector2) -> void:
-	take_hurt()
-	velocity += direction.normalized() * 45.0
+func get_max_hull() -> int:
+	return max_hull
+
+func get_primary_cooldown_left() -> float:
+	return _primary_cooldown_left
+
+func get_secondary_cooldown_left() -> float:
+	return _secondary_cooldown_left
+
+func has_secondary_ability() -> bool:
+	return mecha_id in ["M1", "M3", "S1", "S3", "R3", "R4"]
+
+func is_secondary_unlocked() -> bool:
+	return secondary_unlocked and has_secondary_ability()
+
+func set_secondary_unlocked(value: bool) -> void:
+	secondary_unlocked = value
+
+func apply_primary_cooling(multiplier: float) -> void:
+	_primary_cooldown = maxf(0.16, _primary_cooldown * multiplier)
+	_primary_cooldown_left = minf(_primary_cooldown_left, _primary_cooldown)
+
+func apply_secondary_cooling(multiplier: float) -> void:
+	_secondary_cooldown = maxf(1.0, _secondary_cooldown * multiplier)
+	_secondary_cooldown_left = minf(_secondary_cooldown_left, _secondary_cooldown)
+
+func apply_impact_multiplier(multiplier: float) -> void:
+	impact_scale = clampf(impact_scale * multiplier, 0.75, 3.0)
+
+func apply_move_speed_multiplier(multiplier: float) -> void:
+	player_walk_speed *= multiplier
+	player_run_speed *= multiplier
+
+func add_max_hull(amount: int, repair_amount: int = -1) -> void:
+	max_hull = maxi(1, max_hull + amount)
+	if repair_amount < 0:
+		hull = mini(max_hull, hull + amount)
+	else:
+		hull = mini(max_hull, hull + repair_amount)
+	hull_changed.emit(hull, max_hull)
+
+func repair_hull(amount: int) -> void:
+	if _dead:
+		return
+	hull = mini(max_hull, hull + maxi(0, amount))
+	hull_changed.emit(hull, max_hull)
+
+func take_hurt(amount: int = 10) -> void:
+	if _dead or _hurt_time > 0.0:
+		return
+	_hurt_time = 0.56
+	hull = maxi(0, hull - maxi(1, amount))
+	animated_sprite.modulate = Color(3.0, 0.62, 0.48, 1.0)
+	velocity *= 0.25
+	hull_changed.emit(hull, max_hull)
+	if hull <= 0:
+		_die()
+
+func take_projectile_hit(direction: Vector2, amount: int = 10) -> void:
+	if _dead or _hurt_time > 0.0:
+		return
+	take_hurt(amount)
+	if direction.length_squared() > 0.001 and not _dead:
+		velocity += direction.normalized() * 45.0
 
 func _process_player(delta: float) -> void:
 	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attack_direction := _get_attack_direction()
 
 	if not attacking:
-		# RMB / LT fires the alternate special directly. It no longer needs to
-		# be held together with the primary ability button.
-		if Input.is_action_just_pressed("secondary_ability") and _has_secondary_ability():
-			_attack_target = _get_attack_target(attack_direction)
-			_attack_alternate = true
-			_start_attack(attack_direction, true)
-		elif Input.is_action_just_pressed("shoot"):
+		# Primary is deliberately hold-to-fire for the survival-game loop.
+		if Input.is_action_pressed("shoot") and _primary_cooldown_left <= 0.0:
 			_attack_target = _get_attack_target(attack_direction)
 			_attack_alternate = false
+			_primary_cooldown_left = _primary_cooldown
+			_start_attack(attack_direction, true)
+		elif Input.is_action_just_pressed("secondary_ability") and is_secondary_unlocked() and _secondary_cooldown_left <= 0.0:
+			_attack_target = _get_attack_target(attack_direction)
+			_attack_alternate = true
+			_secondary_cooldown_left = _secondary_cooldown
 			_start_attack(attack_direction, true)
 
 	if attacking:
@@ -143,79 +215,56 @@ func _process_player(delta: float) -> void:
 
 	move_and_slide()
 
-func _process_ai(delta: float) -> void:
-	if attacking:
-		velocity = velocity.move_toward(Vector2.ZERO, deceleration * delta)
-		move_and_slide()
-		return
-
-	_ai_timer -= delta
-	if _ai_state == "idle":
-		velocity = velocity.move_toward(Vector2.ZERO, deceleration * delta)
-		_play_if_needed("idle")
-		if _ai_timer <= 0.0:
-			_begin_ai_patrol()
-	elif _ai_state == "move":
-		var to_target := _ai_target - global_position
-		if to_target.length() <= 5.0 or _ai_timer <= 0.0:
-			_set_ai_idle()
-		else:
-			var direction := to_target.normalized()
-			last_move_direction = direction
-			_update_facing(direction)
-			velocity = velocity.move_toward(direction * ai_move_speed, acceleration * delta)
-			_play_if_needed("move")
-
-	move_and_slide()
-	if get_slide_collision_count() > 0 and _ai_state == "move":
-		_set_ai_idle()
-
-func _set_ai_idle() -> void:
-	_ai_state = "idle"
-	_ai_timer = _rng.randf_range(0.8, 2.5)
-	velocity = Vector2.ZERO
-	if is_node_ready():
-		_play_if_needed("idle")
-
-func _begin_ai_patrol() -> void:
-	_ai_state = "move"
-	_ai_timer = _rng.randf_range(0.8, 1.8)
-	var angle := _rng.randf_range(0.0, TAU)
-	var radius := _rng.randf_range(18.0, ai_patrol_radius)
-	_ai_target = home_position + Vector2(cos(angle), sin(angle)) * radius
-
-func _has_secondary_ability() -> bool:
-	return mecha_id in ["M1", "M3", "S1", "S3", "R3", "R4"]
+func _configure_survival_stats() -> void:
+	match mecha_id:
+		"M1":
+			_primary_cooldown = 0.72
+			_secondary_cooldown = 4.2
+		"M2":
+			_primary_cooldown = 0.82
+		"M3":
+			_primary_cooldown = 1.08
+			_secondary_cooldown = 5.2
+		"S1":
+			_primary_cooldown = 1.28
+			_secondary_cooldown = 5.6
+		"S2":
+			_primary_cooldown = 1.02
+		"S3":
+			_primary_cooldown = 1.18
+			_secondary_cooldown = 4.8
+		"R1":
+			_primary_cooldown = 0.95
+		"R2":
+			_primary_cooldown = 1.18
+		"R3":
+			_primary_cooldown = 1.65
+			_secondary_cooldown = 6.2
+		"R4":
+			_primary_cooldown = 1.38
+			_secondary_cooldown = 5.5
+		_:
+			_primary_cooldown = 0.85
+			_secondary_cooldown = 5.0
 
 func _start_attack(direction: Vector2, launch_projectile: bool) -> void:
-	if attacking:
+	if attacking or _dead:
 		return
-
 	if direction.length_squared() <= 0.001:
 		direction = last_move_direction
-
 	if direction.length_squared() <= 0.001:
 		direction = Vector2.RIGHT
 
 	_attack_direction = direction.normalized()
-
-	# The direction of the ability now becomes the persistent facing direction.
 	last_move_direction = _attack_direction
-
 	_update_facing(_attack_direction)
-
 	attacking = true
 	_attack_projectile_pending = launch_projectile
-
-	_attack_fire_frame = maxi(
-		0,
-		int(animated_sprite.sprite_frames.get_frame_count("attack") / 2) - 1
-	)
-
+	_attack_fire_frame = maxi(0, int(animated_sprite.sprite_frames.get_frame_count("attack") / 2) - 1)
 	animated_sprite.play("attack")
-	
+
 func _on_frame_changed() -> void:
-	if not attacking or not _attack_projectile_pending:
+	if not attacking or not _attack_projectile_pending or _dead:
 		return
 	if animated_sprite.animation != &"attack":
 		return
@@ -227,13 +276,9 @@ func _on_animation_finished() -> void:
 	if animated_sprite.animation == &"attack":
 		attacking = false
 		_attack_projectile_pending = false
-
-		if is_player_controlled:
-			# Keep facing the direction the ability was fired.
+		if is_player_controlled and not _dead:
 			_update_facing(_attack_direction)
 			animated_sprite.play("idle")
-		else:
-			_set_ai_idle()
 
 func _spawn_special_ability(direction: Vector2) -> void:
 	var root := get_tree().current_scene
@@ -242,7 +287,7 @@ func _spawn_special_ability(direction: Vector2) -> void:
 	var effect := SpecialAbilityScript.new() as SpacehaulSpecialAbility
 	root.add_child(effect)
 	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
-	effect.setup(mecha_id, muzzle_origin, _attack_target, get_rid(), _attack_alternate)
+	effect.setup(mecha_id, muzzle_origin, _attack_target, get_rid(), _attack_alternate, impact_scale)
 
 func _get_attack_target(attack_dir: Vector2) -> Vector2:
 	var joy_id := _first_connected_joypad()
@@ -283,13 +328,65 @@ func _update_facing(direction: Vector2) -> void:
 	if absf(direction.x) <= 0.08:
 		return
 	facing = 1 if direction.x > 0.0 else -1
+	# The authored mecha art faces left, so right-facing movement is mirrored.
 	animated_sprite.flip_h = facing > 0
 
 func _play_if_needed(animation_name: StringName) -> void:
-	if attacking:
+	if attacking or _dead:
 		return
 	if animated_sprite.animation != animation_name or not animated_sprite.is_playing():
 		animated_sprite.play(animation_name)
+
+func _die() -> void:
+	if _dead:
+		return
+	_dead = true
+	attacking = false
+	_attack_projectile_pending = false
+	velocity = Vector2.ZERO
+	collision_layer = 0
+	collision_mask = 0
+	if collision_shape != null:
+		collision_shape.set_deferred("disabled", true)
+	if is_in_group("player_mecha"):
+		remove_from_group("player_mecha")
+	animated_sprite.speed_scale = 0.0
+	_start_pixel_dissolve()
+	destroyed.emit(self)
+
+func _start_pixel_dissolve() -> void:
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+render_mode unshaded;
+uniform float dissolve_amount : hint_range(0.0, 1.0) = 0.0;
+uniform vec4 edge_color : source_color = vec4(0.3, 1.7, 2.2, 1.0);
+float pixel_hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+void fragment() {
+	vec4 tex = texture(TEXTURE, UV);
+	if (tex.a < 0.01) { discard; }
+	vec2 tex_size = vec2(textureSize(TEXTURE, 0));
+	vec2 pixel = floor(UV * tex_size);
+	float noise = pixel_hash(pixel);
+	if (noise < dissolve_amount) { discard; }
+	float edge = step(dissolve_amount, noise) * (1.0 - step(dissolve_amount + 0.08, noise));
+	tex.rgb += edge_color.rgb * edge * 1.6;
+	COLOR = tex * COLOR;
+}
+"""
+	_dissolve_material = ShaderMaterial.new()
+	_dissolve_material.shader = shader
+	_dissolve_material.set_shader_parameter("dissolve_amount", 0.0)
+	animated_sprite.material = _dissolve_material
+	var tween := create_tween()
+	tween.tween_method(_set_dissolve_amount, 0.0, 1.0, 1.05)
+	tween.tween_property(animated_sprite, "modulate:a", 0.0, 0.15)
+
+func _set_dissolve_amount(value: float) -> void:
+	if _dissolve_material != null:
+		_dissolve_material.set_shader_parameter("dissolve_amount", value)
 
 func _build_sprite_frames() -> void:
 	var frames := SpriteFrames.new()
@@ -308,7 +405,6 @@ func _add_animation(frames: SpriteFrames, animation_name: String, textures: Arra
 	frames.set_animation_loop(animation_name, looped)
 	for texture in textures:
 		frames.add_frame(animation_name, texture)
-
 	if textures.is_empty():
 		push_error("No %s frames found for mecha %s" % [animation_name, mecha_id])
 

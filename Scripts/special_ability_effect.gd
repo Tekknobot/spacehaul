@@ -10,15 +10,17 @@ var target := Vector2.ZERO
 var direction := Vector2.RIGHT
 var shooter_rid: RID
 var alternate := false
+var impact_scale := 1.0
 var root: Node
 var _rng := RandomNumberGenerator.new()
 
-func setup(new_mecha_id: String, start_position: Vector2, target_position: Vector2, source_rid: RID, use_alternate: bool = false) -> void:
+func setup(new_mecha_id: String, start_position: Vector2, target_position: Vector2, source_rid: RID, use_alternate: bool = false, new_impact_scale: float = 1.0) -> void:
 	mecha_id = new_mecha_id
 	origin = start_position.round()
 	target = target_position.round()
 	shooter_rid = source_rid
 	alternate = use_alternate
+	impact_scale = clampf(new_impact_scale, 0.75, 3.0)
 	direction = (target - origin).normalized()
 	if direction.length_squared() <= 0.001:
 		direction = Vector2.RIGHT
@@ -118,8 +120,8 @@ func _fade_free(node: Node2D, seconds: float = 0.12) -> void:
 func _explode(at: Vector2, core: Color = Color(3.0, 1.5, 0.45, 1.0), glow: Color = Color(1.6, 0.45, 0.1, 1.0), radius: float = 18.0, hit_radius: float = 16.0) -> void:
 	var fx := ExplosionScript.new() as SpacehaulSpecialExplosion
 	root.add_child(fx)
-	fx.setup(at, core, glow, radius)
-	_damage_radius(at, hit_radius, (at - origin).normalized())
+	fx.setup(at, core, glow, radius * impact_scale)
+	_damage_radius(at, hit_radius * impact_scale, (at - origin).normalized())
 
 func _damage_radius(at: Vector2, radius: float, push_dir: Vector2) -> void:
 	if get_world_2d() == null:

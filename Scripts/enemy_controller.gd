@@ -1,7 +1,10 @@
 extends CharacterBody2D
 class_name SpacehaulEnemy
 
+signal defeated(salvage_value: int)
+
 const EnemyProjectileScript = preload("res://Scripts/enemy_projectile.gd")
+const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
 
 const FRAME_SIZE := Vector2(32.0, 32.0)
 const FRAME_COUNT := 8
@@ -37,6 +40,8 @@ var shocker := false
 var projectile_speed := 180.0
 var projectile_color := Color(1.3, 3.0, 1.2, 1.0)
 var projectile_glow := Color(0.25, 1.3, 0.35, 1.0)
+var salvage_value := 1
+var elite := false
 
 var _target: MechaController
 var _dead := false
@@ -208,7 +213,7 @@ func _direction_toward_world(destination: Vector2) -> Vector2:
 func _find_target() -> MechaController:
 	var best: MechaController
 	var best_distance := INF
-	for node in get_tree().get_nodes_in_group("mechas"):
+	for node in get_tree().get_nodes_in_group("player_mecha"):
 		var candidate := node as MechaController
 		if candidate == null:
 			continue
@@ -338,6 +343,8 @@ func _die() -> void:
 	animated_sprite.speed_scale = 0.0
 	animated_sprite.position = _base_sprite_position
 	animated_sprite.modulate = Color.WHITE
+	_spawn_salvage()
+	defeated.emit(salvage_value)
 	_start_pixel_dissolve()
 
 func _start_pixel_dissolve() -> void:
@@ -487,6 +494,38 @@ func _configure_archetype() -> void:
 			projectile_speed = 220.0
 			projectile_color = Color(2.4, 0.52, 0.42, 1.0)
 			projectile_glow = Color(1.2, 0.18, 0.12, 1.0)
+
+
+func _spawn_salvage() -> void:
+	var pickup := SalvagePickupScript.new() as SpacehaulSalvagePickup
+	if pickup == null:
+		return
+	var parent_node := get_parent()
+	if parent_node == null:
+		parent_node = get_tree().current_scene
+	parent_node.add_child(pickup)
+	pickup.setup(global_position + Vector2(0.0, -6.0), salvage_value)
+
+func apply_difficulty(run_time: float, deck_number: int, make_elite: bool = false) -> void:
+	var phase := maxi(0, int(floor(run_time / 180.0)))
+	health += mini(5, phase)
+	move_speed *= minf(1.34, 1.0 + run_time / 2400.0 + float(maxi(0, deck_number - 1)) * 0.025)
+	attack_cooldown *= maxf(0.62, 1.0 - run_time / 3200.0)
+
+	match enemy_type:
+		"alien_1", "bug_1", "bug_2", "spider_1": salvage_value = 1
+		"beetle_2", "bug_3", "spider_2": salvage_value = 2
+		"beetle_1", "bug_4", "spider_3": salvage_value = 3
+		_: salvage_value = 1
+
+	if make_elite:
+		elite = true
+		health = maxi(health + 3, int(ceil(float(health) * 1.8)))
+		move_speed *= 1.08
+		attack_cooldown *= 0.88
+		salvage_value += 4
+		animated_sprite.scale = Vector2.ONE * 1.22
+		animated_sprite.modulate = Color(1.25, 1.0, 0.72, 1.0)
 
 func _build_animation() -> void:
 	var texture_path := String(ENEMY_SHEETS.get(enemy_type, ENEMY_SHEETS["bug_1"]))
