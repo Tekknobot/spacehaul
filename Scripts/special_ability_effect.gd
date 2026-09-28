@@ -129,7 +129,8 @@ func _damage_radius(at: Vector2, radius: float, push_dir: Vector2) -> void:
 	var query := PhysicsShapeQueryParameters2D.new()
 	query.shape = shape
 	query.transform = Transform2D(0.0, at)
-	query.collision_mask = 1
+	# Layer 1 is deck/mechas; layer 2 is hostile fauna.
+	query.collision_mask = 3
 	query.collide_with_bodies = true
 	query.collide_with_areas = true
 	if shooter_rid.is_valid():

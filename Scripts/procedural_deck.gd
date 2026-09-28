@@ -52,6 +52,7 @@ var _accent_cells: Array[Vector2i] = []
 var _floor_styles: Dictionary = {}
 var _start_cell := Vector2i.ONE
 var _wall_visual_root: Node2D
+var _path_grid := AStarGrid2D.new()
 
 @onready var collision_root: Node2D = $CollisionRoot
 @onready var hazard_root: Node2D = $HazardRoot
@@ -72,6 +73,7 @@ func generate_new_level(requested_seed: int = -1) -> void:
 	_rng.seed = seed_value
 	_normalize_generation_values()
 	_build_room_and_hall_deck()
+	_rebuild_path_grid()
 	_select_decorations()
 	_rebuild_collisions()
 	_rebuild_wall_visuals()
@@ -518,4 +520,85 @@ func get_mecha_spawn_positions(count: int) -> Array[Vector2]:
 
 	for cell in chosen:
 		result.append(_cell_center(cell))
+	return result
+
+
+func _rebuild_path_grid() -> void:
+	_path_grid = AStarGrid2D.new()
+	_path_grid.region = Rect2i(0, 0, grid_width, grid_height)
+	_path_grid.cell_size = Vector2.ONE
+	_path_grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_NEVER
+	_path_grid.update()
+	for x in range(grid_width):
+		for y in range(grid_height):
+			if not _walkable[x][y]:
+				_path_grid.set_point_solid(Vector2i(x, y), true)
+
+func world_to_cell(world_position: Vector2) -> Vector2i:
+	# Inverse of the 2:1 isometric projection used by _cell_center().
+	var grid_x := world_position.x / tile_width + world_position.y / tile_height
+	var grid_y := world_position.y / tile_height - world_position.x / tile_width
+	return Vector2i(roundi(grid_x), roundi(grid_y))
+
+func get_next_path_step(from_world: Vector2, to_world: Vector2) -> Vector2:
+	var from_cell := world_to_cell(from_world)
+	var to_cell := world_to_cell(to_world)
+	if not _inside(from_cell) or not _inside(to_cell):
+		return to_world
+	if not _walkable[from_cell.x][from_cell.y] or not _walkable[to_cell.x][to_cell.y]:
+		return to_world
+	var path := _path_grid.get_id_path(from_cell, to_cell)
+	if path.size() >= 2:
+		var next_cell: Vector2i = path[1]
+		return _cell_center(next_cell)
+	return to_world
+
+func get_random_walkable_position_near(center_world: Vector2, radius_cells: int, rng: RandomNumberGenerator) -> Vector2:
+	var center_cell := world_to_cell(center_world)
+	var candidates: Array[Vector2i] = []
+	var radius := maxi(1, radius_cells)
+	for x in range(center_cell.x - radius, center_cell.x + radius + 1):
+		for y in range(center_cell.y - radius, center_cell.y + radius + 1):
+			var cell := Vector2i(x, y)
+			if not _inside(cell):
+				continue
+			if not _walkable[x][y] or cell in _hazard_cells:
+				continue
+			candidates.append(cell)
+	if candidates.is_empty():
+		return center_world
+	var chosen := candidates[rng.randi_range(0, candidates.size() - 1)]
+	return _cell_center(chosen)
+
+func get_enemy_spawn_positions(count: int, minimum_distance_cells: int = 7) -> Array[Vector2]:
+	var result: Array[Vector2] = []
+	if count <= 0:
+		return result
+
+	var candidates: Array[Vector2i] = []
+	for x in range(1, grid_width - 1):
+		for y in range(1, grid_height - 1):
+			if not _walkable[x][y]:
+				continue
+			var cell := Vector2i(x, y)
+			if cell in _hazard_cells:
+				continue
+			if Vector2(cell).distance_to(Vector2(_start_cell)) < float(minimum_distance_cells):
+				continue
+			candidates.append(cell)
+
+	var local_rng := RandomNumberGenerator.new()
+	local_rng.seed = seed_value ^ 0xE11E5
+	for i in range(candidates.size() - 1, 0, -1):
+		var j := local_rng.randi_range(0, i)
+		var temp := candidates[i]
+		candidates[i] = candidates[j]
+		candidates[j] = temp
+
+	var limit := mini(count, candidates.size())
+	for i in range(limit):
+		var center := _cell_center(candidates[i])
+		# Small isometric-safe jitter keeps swarms from looking snapped to a grid.
+		center += Vector2(local_rng.randf_range(-5.0, 5.0), local_rng.randf_range(-2.0, 2.0))
+		result.append(center.round())
 	return result

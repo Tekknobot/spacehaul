@@ -36,6 +36,7 @@ var _attack_target := Vector2.ZERO
 var _attack_alternate := false
 
 func _ready() -> void:
+	add_to_group("mechas")
 	InputSetupScript.ensure_actions()
 	_rng.seed = mecha_id.hash() ^ int(Time.get_ticks_usec()) ^ int(get_instance_id())
 	_build_sprite_frames()

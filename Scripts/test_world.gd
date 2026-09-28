@@ -4,6 +4,7 @@ const InputSetupScript = preload("res://Scripts/input_setup.gd")
 
 @onready var deck: ProceduralDeck = $ProceduralDeck
 @onready var mecha_manager: MechaManager = $MechaManager
+@onready var enemy_manager: SpacehaulEnemyManager = $EnemyManager
 @onready var animation_label: Label = $HUD/TopLeft/Panel/Margin/VBox/Animation
 @onready var speed_label: Label = $HUD/TopLeft/Panel/Margin/VBox/Speed
 @onready var seed_label: Label = $HUD/TopLeft/Panel/Margin/VBox/Seed
@@ -39,7 +40,7 @@ func _update_active_mecha_labels() -> void:
 	var animation_name := mecha_manager.get_active_animation_name().to_upper()
 	animation_label.text = "MECHA %s  ANIMATION %s" % [mecha_name, animation_name]
 	speed_label.text = "SPEED      %03d" % int(round(mecha_manager.get_active_speed()))
-	status_label.text = "ACTIVE %s  TAB SWITCH  LMB PRIMARY  RMB SECONDARY" % mecha_name
+	status_label.text = "ACTIVE %s  HOSTILES %02d  TAB SWITCH  LMB PRIMARY  RMB SECONDARY" % [mecha_name, enemy_manager.get_alive_count()]
 
 func _on_active_mecha_changed(_mecha: MechaController) -> void:
 	_update_active_mecha_labels()
