@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://bvc1ekm041vh0" path="res://Scripts/mecha_controller.gd" id="1_mecha"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_mecha"]
-size = Vector2(18, 16)
+size = Vector2(18, 18)
 
 [node name="Mecha" type="CharacterBody2D" unique_id=1065863512]
 motion_mode = 1
@@ -12,7 +12,7 @@ script = ExtResource("1_mecha")
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="." unique_id=1948000062]
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1735693948]
-position = Vector2(0, -8)
+position = Vector2(0, -9)
 shape = SubResource("RectangleShape2D_mecha")
 
 [node name="ControlMarker" type="Node2D" parent="." unique_id=540291398]

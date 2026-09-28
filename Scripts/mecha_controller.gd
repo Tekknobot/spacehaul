@@ -3,6 +3,7 @@ class_name MechaController
 
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
 const ProjectileScript = preload("res://Scripts/projectile.gd")
+const AbilityEffectScript = preload("res://Scripts/ability_effect.gd")
 
 const GAMEPAD_AIM_DEADZONE := 0.28
 const PROJECTILE_SPAWN_OFFSET := 10.0
@@ -176,17 +177,30 @@ func _begin_ai_patrol() -> void:
 func _start_attack(direction: Vector2, launch_projectile: bool) -> void:
 	if attacking:
 		return
+
 	if direction.length_squared() <= 0.001:
 		direction = last_move_direction
+
 	if direction.length_squared() <= 0.001:
 		direction = Vector2.RIGHT
+
 	_attack_direction = direction.normalized()
+
+	# The direction of the ability now becomes the persistent facing direction.
+	last_move_direction = _attack_direction
+
 	_update_facing(_attack_direction)
+
 	attacking = true
 	_attack_projectile_pending = launch_projectile
-	_attack_fire_frame = maxi(0, int(animated_sprite.sprite_frames.get_frame_count("attack") / 2) - 1)
-	animated_sprite.play("attack")
 
+	_attack_fire_frame = maxi(
+		0,
+		int(animated_sprite.sprite_frames.get_frame_count("attack") / 2) - 1
+	)
+
+	animated_sprite.play("attack")
+	
 func _on_frame_changed() -> void:
 	if not attacking or not _attack_projectile_pending:
 		return
@@ -194,13 +208,17 @@ func _on_frame_changed() -> void:
 		return
 	if animated_sprite.frame >= _attack_fire_frame:
 		_attack_projectile_pending = false
+		_spawn_ability_effect(_attack_direction)
 		_fire_projectile(_attack_direction)
 
 func _on_animation_finished() -> void:
 	if animated_sprite.animation == &"attack":
 		attacking = false
 		_attack_projectile_pending = false
+
 		if is_player_controlled:
+			# Keep facing the direction the ability was fired.
+			_update_facing(_attack_direction)
 			animated_sprite.play("idle")
 		else:
 			_set_ai_idle()
@@ -212,7 +230,16 @@ func _fire_projectile(direction: Vector2) -> void:
 		root = get_parent()
 	root.add_child(projectile)
 	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction * PROJECTILE_SPAWN_OFFSET
-	projectile.setup(muzzle_origin, direction, get_rid())
+	projectile.setup(muzzle_origin, direction, get_rid(), mecha_id)
+
+func _spawn_ability_effect(direction: Vector2) -> void:
+	var root := get_tree().current_scene
+	if root == null:
+		root = get_parent()
+	var effect := AbilityEffectScript.new() as PixelAbilityEffect
+	var origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
+	effect.setup(mecha_id, origin, direction)
+	root.add_child(effect)
 
 func _get_attack_direction() -> Vector2:
 	var joy_id := _first_connected_joypad()
