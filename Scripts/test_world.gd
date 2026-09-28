@@ -52,7 +52,7 @@ func _ready() -> void:
 	mecha_manager.active_mecha_changed.connect(_on_active_mecha_changed)
 
 	title_label.text = "SPACEMECHA"
-	subtitle_label.text = "SURVIVAL DECK"
+	subtitle_label.text = "SURVIVAL PROTOCOL"
 	controls_text.text = "WASD  LEFT STICK  MOVE\nSHIFT  LB  RUN\nHOLD LEFT MOUSE  RT  PRIMARY\nRIGHT MOUSE  LT  SECONDARY\nU  UI TOGGLE\nG  NEW RUN AFTER END"
 	intro.hide()
 	deck_banner.hide()
@@ -138,7 +138,7 @@ func _update_secondary_unlock() -> void:
 		return
 	active.set_secondary_unlocked(true)
 	if active.has_secondary_ability():
-		_show_banner("SECONDARY ONLINE")
+		_show_banner("%s ONLINE" % active.get_secondary_ability_name())
 
 func _on_active_mecha_changed(mecha: MechaController) -> void:
 	if mecha == null:
@@ -215,20 +215,18 @@ func _update_hud() -> void:
 	seed_label.text = "TIME %s  DECK %d" % [_format_time(_run_time), _deck_number]
 
 	var primary_text := "READY" if active.get_primary_cooldown_left() <= 0.0 else "%.1fs" % active.get_primary_cooldown_left()
-	var secondary_text := "NONE"
-	if active.has_secondary_ability():
-		if not active.is_secondary_unlocked():
-			secondary_text = "LOCKED"
-		elif active.get_secondary_cooldown_left() <= 0.0:
-			secondary_text = "READY"
-		else:
-			secondary_text = "%.1fs" % active.get_secondary_cooldown_left()
+	var secondary_text := "LOCKED"
+	if active.is_secondary_unlocked():
+		secondary_text = "READY" if active.get_secondary_cooldown_left() <= 0.0 else "%.1fs" % active.get_secondary_cooldown_left()
 
-	status_label.text = "HOSTILES %02d  KILLS %03d  PRIMARY %s  SECONDARY %s" % [
-		enemy_manager.get_alive_count(),
-		enemy_manager.get_total_kills(),
+	status_label.text = "%s T%d %s   %s T%d %s   HOSTILES %02d" % [
+		active.get_primary_ability_name(),
+		active.get_primary_ability_tier(),
 		primary_text,
+		active.get_secondary_ability_name(),
+		active.get_secondary_ability_tier(),
 		secondary_text,
+		enemy_manager.get_alive_count(),
 	]
 
 func _format_time(seconds: float) -> String:
@@ -325,7 +323,7 @@ func _present_upgrade_choices() -> void:
 	if active == null:
 		return
 
-	var pool: Array[Dictionary] = [
+	var generic_pool: Array[Dictionary] = [
 		{"id": "primary", "label": "PRIMARY COOLING   -15% PRIMARY COOLDOWN"},
 		{"id": "impact", "label": "IMPACT AMPLIFIER   +18% IMPACT RADIUS"},
 		{"id": "hull", "label": "HULL PLATING   +20 MAX HULL AND REPAIR"},
@@ -333,21 +331,46 @@ func _present_upgrade_choices() -> void:
 		{"id": "magnet", "label": "SALVAGE MAGNET   +20% PICKUP RANGE"},
 	]
 	if active.get_hull() < active.get_max_hull():
-		pool.append({"id": "repair", "label": "FIELD REPAIR   RESTORE 30 HULL"})
+		generic_pool.append({"id": "repair", "label": "FIELD REPAIR   RESTORE 30 HULL"})
 	if active.is_secondary_unlocked():
-		pool.append({"id": "secondary", "label": "SECONDARY COOLING   -15% SECONDARY COOLDOWN"})
+		generic_pool.append({"id": "secondary", "label": "SECONDARY COOLING   -15% SECONDARY COOLDOWN"})
 
-	for i in range(pool.size() - 1, 0, -1):
+	var ability_pool: Array[Dictionary] = []
+	if active.can_upgrade_primary_ability():
+		ability_pool.append({"id": "primary_ability", "label": active.get_primary_upgrade_label()})
+	if active.can_upgrade_secondary_ability():
+		ability_pool.append({"id": "secondary_ability", "label": active.get_secondary_upgrade_label()})
+
+	# Keep the chassis identity moving forward: until its ability trees are
+	# capped, every level-up offers at least one chassis-specific evolution.
+	for i in range(ability_pool.size() - 1, 0, -1):
 		var j := _rng.randi_range(0, i)
-		var temp := pool[i]
-		pool[i] = pool[j]
-		pool[j] = temp
+		var temp := ability_pool[i]
+		ability_pool[i] = ability_pool[j]
+		ability_pool[j] = temp
+	for i in range(generic_pool.size() - 1, 0, -1):
+		var j := _rng.randi_range(0, i)
+		var temp := generic_pool[i]
+		generic_pool[i] = generic_pool[j]
+		generic_pool[j] = temp
 
 	_upgrade_choices.clear()
-	for i in range(mini(3, pool.size())):
-		_upgrade_choices.append(pool[i])
-		_upgrade_buttons[i].text = "%d   %s" % [i + 1, String(pool[i]["label"])]
-		_upgrade_buttons[i].disabled = false
+	if not ability_pool.is_empty():
+		_upgrade_choices.append(ability_pool[0])
+	for option in generic_pool:
+		if _upgrade_choices.size() >= 3:
+			break
+		_upgrade_choices.append(option)
+	if _upgrade_choices.size() < 3 and ability_pool.size() > 1:
+		_upgrade_choices.append(ability_pool[1])
+
+	for i in range(_upgrade_buttons.size()):
+		if i < _upgrade_choices.size():
+			_upgrade_buttons[i].text = "%d   %s" % [i + 1, String(_upgrade_choices[i]["label"])]
+			_upgrade_buttons[i].disabled = false
+		else:
+			_upgrade_buttons[i].text = ""
+			_upgrade_buttons[i].disabled = true
 
 	_upgrade_title.text = "SALVAGE LEVEL %02d" % _level
 	_upgrade_overlay.show()
@@ -367,8 +390,12 @@ func _choose_upgrade(index: int) -> void:
 	match choice_id:
 		"primary":
 			active.apply_primary_cooling(0.85)
+		"primary_ability":
+			active.upgrade_primary_ability()
 		"secondary":
 			active.apply_secondary_cooling(0.85)
+		"secondary_ability":
+			active.upgrade_secondary_ability()
 		"impact":
 			active.apply_impact_multiplier(1.18)
 		"hull":

@@ -9,6 +9,45 @@ const SpecialAbilityScript = preload("res://Scripts/special_ability_effect.gd")
 
 const GAMEPAD_AIM_DEADZONE := 0.28
 
+
+const MAX_ABILITY_TIER := 3
+const ABILITY_NAMES := {
+	"M1": {"primary": "PLASMA CLEAVER", "secondary": "REPULSOR BURST"},
+	"M2": {"primary": "VECTOR HARPOONS", "secondary": "ANCHOR BLOOM"},
+	"M3": {"primary": "COMET MORTAR", "secondary": "ORBITAL RAIN"},
+	"R1": {"primary": "PRISM LANCE", "secondary": "HALO SWEEP"},
+	"R2": {"primary": "BREACH CANNON", "secondary": "COUNTERSHOCK"},
+	"R3": {"primary": "SWARM RACK", "secondary": "FLAK DOME"},
+	"R4": {"primary": "ARC CASCADE", "secondary": "EMP CROWN"},
+	"S1": {"primary": "PHOTON RAKE", "secondary": "SOLAR FLARE"},
+	"S2": {"primary": "GRAVITY WELL", "secondary": "MASS EJECTION"},
+	"S3": {"primary": "PHASE NEEDLES", "secondary": "PHASE BLOOM"},
+}
+const PRIMARY_UPGRADE_LABELS := {
+	"M1": ["WIDER EDGE   ARC +2 TEETH", "TWIN EDGE   SECOND CLEAVE", "RETURN CUT   THIRD BACKSWING"],
+	"M2": ["HARPOON ARRAY II   5 TETHERS", "HARPOON ARRAY III   7 TETHERS", "LONG HAUL   RANGE + IMPACT"],
+	"M3": ["MORTAR SHARDING   +2 SHRAPNEL", "MORTAR SHARDING II   +4 SHRAPNEL", "DOUBLE TAP   CORE REDETONATES"],
+	"R1": ["PRISM IV   +1 LANCE", "PRISM V   +2 LANCES", "REFRACTION   CROSS BURSTS"],
+	"R2": ["BREACH II   +2 SPLINTERS", "BREACH III   IMPACT + RANGE", "BREACH CORE   +2 SPLINTERS"],
+	"R3": ["SWARM IV   +1 MISSILE", "SWARM V   +2 MISSILES", "SWARM VI   +3 MISSILES + RANGE"],
+	"R4": ["CASCADE II   +2 CHAIN HOPS", "CASCADE III   +4 CHAIN HOPS", "CASCADE IV   +6 HOPS + JUMP RANGE"],
+	"S1": ["RAKE V   +2 BEAMS", "RAKE VII   +4 BEAMS", "RAKE IX   +6 BEAMS + RANGE"],
+	"S2": ["WELL II   PULL RADIUS +12", "DEEP WELL   EXTRA COLLAPSE", "EVENT HORIZON   DOUBLE IMPLOSION"],
+	"S3": ["NEEDLE VII   +2 SHARDS", "NEEDLE IX   +4 SHARDS", "PHASE FAN   +6 SHARDS + SPREAD"],
+}
+const SECONDARY_UPGRADE_LABELS := {
+	"M1": ["REPULSOR II   +4 SPOKES + RANGE", "DOUBLE PULSE   SECOND RING", "OVERSHOCK   THIRD RING"],
+	"M2": ["ANCHOR II   PULL RADIUS +14", "DOUBLE COLLAPSE   EXTRA STEP", "ANCHOR NOVA   OVERSIZED RELEASE"],
+	"M3": ["RAIN II   +4 ORBITAL STRIKES", "RAIN III   +8 ORBITAL STRIKES", "SATURATION   +12 STRIKES + RANGE"],
+	"R1": ["HALO II   +4 SPOKES", "DOUBLE SWEEP   SECOND PHASE", "HALO III   RANGE + SPOKES"],
+	"R2": ["COUNTER II   +2 BLASTS", "COUNTER III   +4 BLASTS", "COUNTER CORE   +6 BLASTS + RANGE"],
+	"R3": ["DOME II   +2 FLAK MISSILES", "DOME III   +4 FLAK MISSILES", "DOME IV   +6 MISSILES + RANGE"],
+	"R4": ["CROWN III   +1 EMP WAVE", "CROWN IV   +2 EMP WAVES", "CROWN V   +3 WAVES + DENSITY"],
+	"S1": ["FLARE XII   +4 RADIAL BEAMS", "FLARE XVI   +8 RADIAL BEAMS", "SOLAR MAX   +12 BEAMS + RANGE"],
+	"S2": ["EJECTION II   FIELD +14", "EJECTION III   IMPACT + FIELD", "MASS BREAK   MAXIMUM FIELD"],
+	"S3": ["BLOOM II   SECOND PHASE WAVE", "BLOOM III   THIRD PHASE WAVE", "BLOOM IV   FOUR WAVES + DENSITY"],
+}
+
 @export var mecha_id := "M1"
 @export var player_walk_speed := 92.0
 @export var player_run_speed := 138.0
@@ -28,6 +67,8 @@ var attacking := false
 var hull := 100
 var impact_scale := 1.0
 var secondary_unlocked := false
+var primary_ability_tier := 0
+var secondary_ability_tier := 0
 
 var _rng := RandomNumberGenerator.new()
 var _attack_fire_frame := 0
@@ -125,13 +166,52 @@ func get_secondary_cooldown_left() -> float:
 	return _secondary_cooldown_left
 
 func has_secondary_ability() -> bool:
-	return mecha_id in ["M1", "M3", "S1", "S3", "R3", "R4"]
+	return true
 
 func is_secondary_unlocked() -> bool:
 	return secondary_unlocked and has_secondary_ability()
 
 func set_secondary_unlocked(value: bool) -> void:
 	secondary_unlocked = value
+
+
+func get_primary_ability_name() -> String:
+	var data: Dictionary = ABILITY_NAMES.get(mecha_id, {})
+	return String(data.get("primary", "PRIMARY"))
+
+func get_secondary_ability_name() -> String:
+	var data: Dictionary = ABILITY_NAMES.get(mecha_id, {})
+	return String(data.get("secondary", "SECONDARY"))
+
+func get_primary_ability_tier() -> int:
+	return primary_ability_tier
+
+func get_secondary_ability_tier() -> int:
+	return secondary_ability_tier
+
+func can_upgrade_primary_ability() -> bool:
+	return primary_ability_tier < MAX_ABILITY_TIER
+
+func can_upgrade_secondary_ability() -> bool:
+	return is_secondary_unlocked() and secondary_ability_tier < MAX_ABILITY_TIER
+
+func upgrade_primary_ability() -> void:
+	primary_ability_tier = mini(MAX_ABILITY_TIER, primary_ability_tier + 1)
+
+func upgrade_secondary_ability() -> void:
+	secondary_ability_tier = mini(MAX_ABILITY_TIER, secondary_ability_tier + 1)
+
+func get_primary_upgrade_label() -> String:
+	var labels: Array = PRIMARY_UPGRADE_LABELS.get(mecha_id, [])
+	if primary_ability_tier >= labels.size():
+		return ""
+	return "%s   %s" % [get_primary_ability_name(), String(labels[primary_ability_tier])]
+
+func get_secondary_upgrade_label() -> String:
+	var labels: Array = SECONDARY_UPGRADE_LABELS.get(mecha_id, [])
+	if secondary_ability_tier >= labels.size():
+		return ""
+	return "%s   %s" % [get_secondary_ability_name(), String(labels[secondary_ability_tier])]
 
 func apply_primary_cooling(multiplier: float) -> void:
 	_primary_cooldown = maxf(0.16, _primary_cooldown * multiplier)
@@ -218,34 +298,38 @@ func _process_player(delta: float) -> void:
 func _configure_survival_stats() -> void:
 	match mecha_id:
 		"M1":
-			_primary_cooldown = 0.72
-			_secondary_cooldown = 4.2
-		"M2":
-			_primary_cooldown = 0.82
-		"M3":
-			_primary_cooldown = 1.08
+			_primary_cooldown = 0.68
 			_secondary_cooldown = 5.2
-		"S1":
-			_primary_cooldown = 1.28
-			_secondary_cooldown = 5.6
-		"S2":
-			_primary_cooldown = 1.02
-		"S3":
-			_primary_cooldown = 1.18
-			_secondary_cooldown = 4.8
+		"M2":
+			_primary_cooldown = 0.72
+			_secondary_cooldown = 5.4
+		"M3":
+			_primary_cooldown = 1.12
+			_secondary_cooldown = 6.4
 		"R1":
-			_primary_cooldown = 0.95
+			_primary_cooldown = 0.56
+			_secondary_cooldown = 5.8
 		"R2":
-			_primary_cooldown = 1.18
-		"R3":
-			_primary_cooldown = 1.65
+			_primary_cooldown = 1.08
 			_secondary_cooldown = 6.2
+		"R3":
+			_primary_cooldown = 1.36
+			_secondary_cooldown = 6.8
 		"R4":
-			_primary_cooldown = 1.38
-			_secondary_cooldown = 5.5
+			_primary_cooldown = 0.82
+			_secondary_cooldown = 6.0
+		"S1":
+			_primary_cooldown = 0.94
+			_secondary_cooldown = 6.2
+		"S2":
+			_primary_cooldown = 1.06
+			_secondary_cooldown = 6.4
+		"S3":
+			_primary_cooldown = 0.76
+			_secondary_cooldown = 5.6
 		_:
 			_primary_cooldown = 0.85
-			_secondary_cooldown = 5.0
+			_secondary_cooldown = 5.8
 
 func _start_attack(direction: Vector2, launch_projectile: bool) -> void:
 	if attacking or _dead:
@@ -287,7 +371,7 @@ func _spawn_special_ability(direction: Vector2) -> void:
 	var effect := SpecialAbilityScript.new() as SpacehaulSpecialAbility
 	root.add_child(effect)
 	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
-	effect.setup(mecha_id, muzzle_origin, _attack_target, get_rid(), _attack_alternate, impact_scale)
+	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier)
 
 func _get_attack_target(attack_dir: Vector2) -> Vector2:
 	var joy_id := _first_connected_joypad()
