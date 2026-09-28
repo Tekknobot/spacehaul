@@ -9,15 +9,6 @@ const SECONDARY_UNLOCK_TIME := 90.0
 @onready var deck: ProceduralDeck = $ProceduralDeck
 @onready var mecha_manager: MechaManager = $MechaManager
 @onready var enemy_manager: SpacehaulEnemyManager = $EnemyManager
-@onready var title_label: Label = $HUD/Title
-@onready var subtitle_label: Label = $HUD/Subtitle
-@onready var animation_label: Label = $HUD/TopLeft/Panel/Margin/VBox/Animation
-@onready var speed_label: Label = $HUD/TopLeft/Panel/Margin/VBox/Speed
-@onready var seed_label: Label = $HUD/TopLeft/Panel/Margin/VBox/Seed
-@onready var controls_panel: Control = $HUD/Controls
-@onready var controls_text: Label = $HUD/Controls/Margin/VBox/Text
-@onready var status_label: Label = $HUD/BottomCenter/StatusPanel/Margin/Status
-@onready var intro: Control = $HUD/Intro
 @onready var deck_banner: Control = $HUD/DeckBanner
 @onready var deck_banner_text: Label = $HUD/DeckBanner/Panel/Margin/Text
 @onready var hud: CanvasLayer = $HUD
@@ -41,6 +32,15 @@ var _upgrade_buttons: Array[Button] = []
 var _upgrade_choices: Array[Dictionary] = []
 var _rng := RandomNumberGenerator.new()
 
+var _top_hud: Control
+var _hud_mecha: Label
+var _hud_hull: Label
+var _hud_level: Label
+var _hud_salvage: Label
+var _hud_time: Label
+var _hud_deck: Label
+var _hud_hostiles: Label
+
 func _enter_tree() -> void:
 	add_to_group("survival_manager")
 
@@ -51,11 +51,9 @@ func _ready() -> void:
 	deck.regenerated.connect(_on_deck_regenerated)
 	mecha_manager.active_mecha_changed.connect(_on_active_mecha_changed)
 
-	title_label.text = "SPACEMECHA"
-	subtitle_label.text = "SURVIVAL PROTOCOL"
-	controls_text.text = "WASD  LEFT STICK  MOVE\nSHIFT  LB  RUN\nHOLD LEFT MOUSE  RT  PRIMARY\nRIGHT MOUSE  LT  SECONDARY\nU  UI TOGGLE\nG  NEW RUN AFTER END"
-	intro.hide()
+	_hide_legacy_hud()
 	deck_banner.hide()
+	_build_compact_hud()
 	_build_upgrade_overlay()
 	_set_standard_hud_visible(false)
 
@@ -138,7 +136,7 @@ func _update_secondary_unlock() -> void:
 		return
 	active.set_secondary_unlocked(true)
 	if active.has_secondary_ability():
-		_show_banner("%s ONLINE" % active.get_secondary_ability_name())
+		_show_banner("SECONDARY ONLINE   RMB")
 
 func _on_active_mecha_changed(mecha: MechaController) -> void:
 	if mecha == null:
@@ -201,45 +199,129 @@ func _on_deck_regenerated(_new_spawn: Vector2, new_seed: int) -> void:
 	_update_hud()
 
 func _update_hud() -> void:
+	if _hud_mecha == null:
+		return
 	var active := mecha_manager.get_active_mecha()
-	var mecha_name := mecha_manager.get_active_mecha_name()
 	if active == null:
-		animation_label.text = "MECHA NONE"
-		speed_label.text = "LEVEL %02d" % _level
-		seed_label.text = "TIME %s  DECK %d" % [_format_time(_run_time), _deck_number]
-		status_label.text = "NO ACTIVE CHASSIS"
+		_hud_mecha.text = "NO MECHA"
+		_hud_hull.text = "HULL --"
+		_hud_level.text = "LV %02d" % _level
+		_hud_salvage.text = "SALV %02d/%02d" % [_salvage, _salvage_required]
+		_hud_time.text = _format_time(_run_time)
+		_hud_deck.text = "DECK %d" % _deck_number
+		_hud_hostiles.text = "FOES %02d" % enemy_manager.get_alive_count()
 		return
 
-	animation_label.text = "%s  HULL %03d/%03d" % [mecha_name, active.get_hull(), active.get_max_hull()]
-	speed_label.text = "LEVEL %02d  SALVAGE %02d/%02d" % [_level, _salvage, _salvage_required]
-	seed_label.text = "TIME %s  DECK %d" % [_format_time(_run_time), _deck_number]
+	_hud_mecha.text = mecha_manager.get_active_mecha_name()
+	_hud_hull.text = "HULL %03d/%03d" % [active.get_hull(), active.get_max_hull()]
+	_hud_level.text = "LV %02d" % _level
+	_hud_salvage.text = "SALV %02d/%02d" % [_salvage, _salvage_required]
+	_hud_time.text = _format_time(_run_time)
+	_hud_deck.text = "DECK %d" % _deck_number
+	_hud_hostiles.text = "FOES %02d" % enemy_manager.get_alive_count()
 
-	var primary_text := "READY" if active.get_primary_cooldown_left() <= 0.0 else "%.1fs" % active.get_primary_cooldown_left()
-	var secondary_text := "LOCKED"
-	if active.is_secondary_unlocked():
-		secondary_text = "READY" if active.get_secondary_cooldown_left() <= 0.0 else "%.1fs" % active.get_secondary_cooldown_left()
-
-	status_label.text = "%s T%d %s   %s T%d %s   HOSTILES %02d" % [
-		active.get_primary_ability_name(),
-		active.get_primary_ability_tier(),
-		primary_text,
-		active.get_secondary_ability_name(),
-		active.get_secondary_ability_tier(),
-		secondary_text,
-		enemy_manager.get_alive_count(),
-	]
+	var hull_ratio := float(active.get_hull()) / float(maxi(1, active.get_max_hull()))
+	if hull_ratio <= 0.30:
+		_hud_hull.add_theme_color_override("font_color", Color(1.0, 0.34, 0.28, 1.0))
+	elif hull_ratio <= 0.60:
+		_hud_hull.add_theme_color_override("font_color", Color(1.0, 0.72, 0.28, 1.0))
+	else:
+		_hud_hull.add_theme_color_override("font_color", Color(0.45, 1.0, 0.72, 1.0))
 
 func _format_time(seconds: float) -> String:
 	var total := maxi(0, int(floor(seconds)))
 	return "%02d:%02d" % [int(total / 60), total % 60]
 
+func _hide_legacy_hud() -> void:
+	# Keep the old scene nodes as harmless placeholders so existing scene UIDs stay
+	# stable, but never show them. A dedicated menu can reuse them later.
+	$HUD/Title.hide()
+	$HUD/Subtitle.hide()
+	$HUD/TopLeft.hide()
+	$HUD/Controls.hide()
+	$HUD/BottomCenter.hide()
+	$HUD/Intro.hide()
+
+func _build_compact_hud() -> void:
+	_top_hud = MarginContainer.new()
+	_top_hud.name = "TopStats"
+	_top_hud.anchor_left = 0.0
+	_top_hud.anchor_top = 0.0
+	_top_hud.anchor_right = 1.0
+	_top_hud.anchor_bottom = 0.0
+	_top_hud.offset_left = 8.0
+	_top_hud.offset_top = 7.0
+	_top_hud.offset_right = -8.0
+	_top_hud.offset_bottom = 41.0
+	_top_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(_top_hud)
+
+	var outer_panel := PanelContainer.new()
+	var outer_style := StyleBoxFlat.new()
+	outer_style.bg_color = Color(0.018, 0.027, 0.039, 0.92)
+	outer_style.border_width_left = 1
+	outer_style.border_width_top = 1
+	outer_style.border_width_right = 1
+	outer_style.border_width_bottom = 1
+	outer_style.border_color = Color(0.16, 0.30, 0.36, 0.95)
+	outer_style.corner_radius_top_left = 3
+	outer_style.corner_radius_top_right = 3
+	outer_style.corner_radius_bottom_left = 3
+	outer_style.corner_radius_bottom_right = 3
+	outer_panel.add_theme_stylebox_override("panel", outer_style)
+	_top_hud.add_child(outer_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 4)
+	margin.add_theme_constant_override("margin_top", 3)
+	margin.add_theme_constant_override("margin_right", 4)
+	margin.add_theme_constant_override("margin_bottom", 3)
+	outer_panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	margin.add_child(row)
+
+	_hud_mecha = _make_stat_cell(row, Color(0.48, 0.92, 1.0, 1.0))
+	_hud_hull = _make_stat_cell(row, Color(0.45, 1.0, 0.72, 1.0))
+	_hud_level = _make_stat_cell(row, Color(0.80, 0.62, 1.0, 1.0))
+	_hud_salvage = _make_stat_cell(row, Color(1.0, 0.80, 0.38, 1.0))
+	_hud_time = _make_stat_cell(row, Color(0.72, 0.88, 0.96, 1.0))
+	_hud_deck = _make_stat_cell(row, Color(0.47, 0.76, 1.0, 1.0))
+	_hud_hostiles = _make_stat_cell(row, Color(1.0, 0.48, 0.34, 1.0))
+
+func _make_stat_cell(row: HBoxContainer, color: Color) -> Label:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_stretch_ratio = 1.0
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(color.r * 0.055, color.g * 0.055, color.b * 0.055, 0.72)
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.border_color = Color(color.r * 0.42, color.g * 0.42, color.b * 0.42, 0.72)
+	style.corner_radius_top_left = 2
+	style.corner_radius_top_right = 2
+	style.corner_radius_bottom_left = 2
+	style.corner_radius_bottom_right = 2
+	panel.add_theme_stylebox_override("panel", style)
+	row.add_child(panel)
+
+	var label := Label.new()
+	label.custom_minimum_size = Vector2(0.0, 22.0)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	label.add_theme_font_size_override("font_size", 16)
+	label.add_theme_color_override("font_color", color)
+	panel.add_child(label)
+	return label
+
 func _set_standard_hud_visible(value: bool) -> void:
 	_hud_visible = value
-	title_label.visible = value
-	subtitle_label.visible = value
-	$HUD/TopLeft.visible = value
-	controls_panel.visible = value
-	$HUD/BottomCenter.visible = value
+	if _top_hud != null:
+		_top_hud.visible = value
 
 func _show_banner(message: String, hold_time: float = 0.8) -> void:
 	if _banner_tween != null and _banner_tween.is_valid():

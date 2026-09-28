@@ -19,7 +19,6 @@ static func ensure_actions() -> void:
 	_add_action("respawn")
 	_add_action("regenerate_level")
 	_add_action("toggle_ui")
-	_add_action("switch_mecha")
 
 	_add_key("move_left", KEY_A)
 	_add_key("move_left", KEY_LEFT)
@@ -74,9 +73,9 @@ static func ensure_actions() -> void:
 	_add_key("regenerate_level", KEY_G)
 	_add_joy_button("regenerate_level", JOY_BUTTON_RIGHT_SHOULDER)
 
-	_add_key("toggle_ui", KEY_U)
-	_add_key("switch_mecha", KEY_TAB)
-	_add_joy_button("switch_mecha", JOY_BUTTON_Y)
+	# Survival runs use a single chassis. TAB now owns the compact HUD toggle;
+	# the old switch-mecha binding is intentionally left unbound.
+	_add_key("toggle_ui", KEY_TAB)
 
 static func _add_action(action: StringName, deadzone: float = 0.2) -> void:
 	if not InputMap.has_action(action):

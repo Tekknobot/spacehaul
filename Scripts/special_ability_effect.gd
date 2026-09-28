@@ -296,47 +296,125 @@ func _straight_shot_from(start: Vector2, dest: Vector2, core: Color, glow: Color
 		projectile.queue_free()
 	_explode(dest, core, glow, explode_radius, explode_radius)
 
-func _arc_shot_from(start: Vector2, dest: Vector2, arc_height: float, travel_time: float, core: Color, glow: Color, explode_radius: float = 18.0) -> void:
+func _arc_shot_from(
+	start: Vector2,
+	dest: Vector2,
+	arc_height: float,
+	travel_time: float,
+	core: Color,
+	glow: Color,
+	explode_radius: float = 18.0,
+	tracking_target_id: int = 0
+) -> Vector2:
 	var projectile := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 	root.add_child(projectile)
 	projectile.setup(start.round(), core, glow, 1.0)
+
 	var trail_container := Node2D.new()
 	trail_container.z_as_relative = false
 	trail_container.z_index = 1699
 	root.add_child(trail_container)
+
 	var trail_glow := Line2D.new()
 	trail_glow.width = BLOOM_PIXEL
 	trail_glow.default_color = Color(glow.r, glow.g, glow.b, 0.24)
 	trail_glow.antialiased = false
 	trail_glow.use_parent_material = true
 	trail_container.add_child(trail_glow)
+
 	var trail_core := Line2D.new()
 	trail_core.width = CORE_PIXEL
 	trail_core.default_color = Color(core.r, core.g, core.b, 0.78)
 	trail_core.antialiased = false
 	trail_core.use_parent_material = true
 	trail_container.add_child(trail_core)
+
 	var additive := CanvasItemMaterial.new()
 	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	trail_container.material = additive
+
 	var elapsed := 0.0
+	var live_dest := dest.round()
+
 	while elapsed < travel_time:
 		await get_tree().process_frame
 		elapsed += get_process_delta_time()
-		var t := clampf(elapsed / maxf(travel_time, 0.001), 0.0, 1.0)
-		var p := start.lerp(dest, t)
+
+		# Resolve the tracked enemy fresh every frame.
+		# If it has been killed/freed, instance_from_id() simply returns null
+		# and the projectile continues toward its last valid destination.
+		if tracking_target_id != 0:
+			var tracked_object := instance_from_id(tracking_target_id)
+			var tracked_node := tracked_object as Node2D
+
+			if tracked_node != null and is_instance_valid(tracked_node):
+				if tracked_node.is_inside_tree():
+					live_dest = tracked_node.global_position.round()
+
+		var t := clampf(
+			elapsed / maxf(travel_time, 0.001),
+			0.0,
+			1.0
+		)
+
+		var p := start.lerp(live_dest, t)
 		p.y -= sin(t * PI) * arc_height
 		p = p.round()
-		projectile.global_position = p
+
+		if is_instance_valid(projectile):
+			projectile.global_position = p
+
 		trail_glow.add_point(p)
 		trail_core.add_point(p)
+
 		if trail_core.get_point_count() > 24:
 			trail_core.remove_point(0)
 			trail_glow.remove_point(0)
+
 	if is_instance_valid(projectile):
 		projectile.queue_free()
-	_fade_free(trail_container, 0.14)
-	_explode(dest, core, glow, explode_radius, explode_radius)
+
+	if is_instance_valid(trail_container):
+		_fade_free(trail_container, 0.14)
+
+	_explode(
+		live_dest,
+		core,
+		glow,
+		explode_radius,
+		explode_radius
+	)
+
+	return live_dest
+
+func _nearest_enemy_to_aim(aim_point: Vector2, lock_radius: float, max_owner_range: float) -> Node2D:
+	var best: Node2D
+	var best_distance_sq := lock_radius * lock_radius
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var enemy := node as Node2D
+		if enemy == null or not is_instance_valid(enemy) or not enemy.is_inside_tree():
+			continue
+		var collision_body := enemy as CollisionObject2D
+		if collision_body != null and collision_body.collision_layer == 0:
+			continue
+		if owner_center.distance_to(enemy.global_position) > max_owner_range:
+			continue
+		var distance_sq := aim_point.distance_squared_to(enemy.global_position)
+		if distance_sq <= best_distance_sq:
+			best_distance_sq = distance_sq
+			best = enemy
+	return best
+
+func _show_target_lock(at: Vector2, core: Color, glow: Color) -> void:
+	# A tiny 1px reticle confirms that an arcing weapon acquired the enemy nearest
+	# the cursor. It uses the same 1px core / 2px bloom language as every other FX.
+	_pulse_ring(at.round(), 8.0, core, Color(glow.r, glow.g, glow.b, 0.22), 0.11, 12)
+	var arms := [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]
+	for arm in arms:
+		var a = at + arm * 7.0
+		var b = at + arm * 11.0
+		var mark := _line(a, b, core, Color(glow.r, glow.g, glow.b, 0.18))
+		_fade_free(mark, 0.11)
 
 func _target_clamped(max_range: float) -> Vector2:
 	var delta := target - origin
@@ -481,21 +559,83 @@ func _m2_anchor_bloom() -> void:
 # M3 PRIMARY: COMET MORTAR
 func _m3_comet_mortar() -> void:
 	var tier := primary_tier
-	var dest := _target_clamped(245.0 + float(tier) * 12.0)
-	await _arc_shot_from(origin, dest, 78.0 + float(tier) * 12.0, 0.42, Color(3.0, 1.15, 0.28, 1.0), Color(1.5, 0.32, 0.08, 1.0), 19.0 + float(tier) * 2.0)
+	var max_range := 245.0 + float(tier) * 12.0
+
+	var locked_target := _nearest_enemy_to_aim(
+		target,
+		74.0,
+		max_range
+	)
+
+	var tracking_target_id := 0
+	var dest := _target_clamped(max_range)
+
+	if locked_target != null and is_instance_valid(locked_target):
+		tracking_target_id = locked_target.get_instance_id()
+		dest = locked_target.global_position.round()
+
+		_show_target_lock(
+			dest,
+			Color(3.0, 1.75, 0.55, 1.0),
+			Color(1.5, 0.35, 0.08, 1.0)
+		)
+
+	dest = await _arc_shot_from(
+		origin,
+		dest,
+		70.0 + float(tier) * 10.0,
+		0.34,
+		Color(3.0, 1.15, 0.28, 1.0),
+		Color(1.5, 0.32, 0.08, 1.0),
+		19.0 + float(tier) * 2.0,
+		tracking_target_id
+	)
+
 	var shards := 4 + tier * 2
 	var shard_radius := 32.0 + float(tier) * 5.0
+
 	for i in range(shards):
 		var angle := TAU * float(i) / float(shards)
-		var end := (dest + Vector2(cos(angle), sin(angle)) * shard_radius).round()
-		var shrapnel := _line(dest, end, Color(3.0, 1.8, 0.65, 0.95), Color(1.5, 0.4, 0.08, 0.22))
-		_damage_line(dest, end, 3.0)
-		_explode(end, Color(3.0, 1.45, 0.4, 1.0), Color(1.5, 0.35, 0.08, 1.0), 8.0, 8.0)
+
+		var end := (
+			dest
+			+ Vector2(cos(angle), sin(angle)) * shard_radius
+		).round()
+
+		var shrapnel := _line(
+			dest,
+			end,
+			Color(3.0, 1.8, 0.65, 0.95),
+			Color(1.5, 0.4, 0.08, 0.22)
+		)
+
+		_damage_line(
+			dest,
+			end,
+			3.0
+		)
+
+		_explode(
+			end,
+			Color(3.0, 1.45, 0.4, 1.0),
+			Color(1.5, 0.35, 0.08, 1.0),
+			8.0,
+			8.0
+		)
+
 		_fade_free(shrapnel, 0.12)
+
 	if tier >= 3:
 		await _sleep(0.10)
-		_explode(dest, Color(3.2, 2.0, 0.8, 1.0), Color(1.7, 0.45, 0.08, 1.0), 24.0, 24.0)
 
+		_explode(
+			dest,
+			Color(3.2, 2.0, 0.8, 1.0),
+			Color(1.7, 0.45, 0.08, 1.0),
+			24.0,
+			24.0
+		)
+		
 # M3 SECONDARY: ORBITAL RAIN
 func _m3_orbital_rain() -> void:
 	var tier := secondary_tier
@@ -583,18 +723,68 @@ func _r2_countershock() -> void:
 		_fade_free(beam, 0.15)
 	await _sleep(0.05)
 
-# R3 PRIMARY: SWARM RACK
+# R3 PRIMARY: HUNTER MISSILES
 func _r3_swarm_rack() -> void:
 	var tier := primary_tier
 	var missile_count := 3 + tier
-	var center_point := _target_clamped(275.0 + float(tier) * 12.0)
-	for i in range(missile_count):
-		var angle := TAU * float(i) / float(missile_count) + _rng.randf_range(-0.22, 0.22)
-		var dest := center_point + Vector2(cos(angle), sin(angle)) * (18.0 + float(tier) * 4.0)
-		await _arc_shot_from(origin, dest, 58.0 + float(i % 3) * 11.0, 0.24 + float(i % 2) * 0.04, Color(1.55, 2.75, 3.25, 1.0), Color(0.2, 0.8, 1.5, 1.0), 12.0 + float(tier))
-		await _sleep(0.025)
+	var max_range := 275.0 + float(tier) * 12.0
 
-# R3 SECONDARY: FLAK DOME
+	var locked_target := _nearest_enemy_to_aim(
+		target,
+		84.0,
+		max_range
+	)
+
+	var tracking_target_id := 0
+	var center_point := _target_clamped(max_range)
+
+	if locked_target != null and is_instance_valid(locked_target):
+		tracking_target_id = locked_target.get_instance_id()
+		center_point = locked_target.global_position.round()
+
+		_show_target_lock(
+			center_point,
+			Color(1.6, 2.9, 3.35, 1.0),
+			Color(0.2, 0.85, 1.55, 1.0)
+		)
+
+	for i in range(missile_count):
+		var dest := center_point
+
+		# No target lock:
+		# retain the small ground-target spread.
+		if tracking_target_id == 0:
+			var angle := (
+				TAU
+				* float(i)
+				/ float(maxi(1, missile_count))
+			)
+
+			var offset_radius := (
+				0.0
+				if i == 0
+				else 5.0 + float(tier)
+			)
+
+			dest += (
+				Vector2(cos(angle), sin(angle))
+				* offset_radius
+			)
+
+		await _arc_shot_from(
+			origin,
+			dest,
+			52.0 + float(i % 3) * 9.0,
+			0.20 + float(i % 2) * 0.03,
+			Color(1.55, 2.75, 3.25, 1.0),
+			Color(0.2, 0.8, 1.5, 1.0),
+			12.0 + float(tier),
+			tracking_target_id
+		)
+
+		await _sleep(0.018)
+		
+# R3 SECONDARY: MISSILE HALO
 func _r3_flak_dome() -> void:
 	var tier := secondary_tier
 	var missile_count := 8 + tier * 2
@@ -678,22 +868,98 @@ func _s1_solar_flare() -> void:
 # S2 PRIMARY: GRAVITY WELL
 func _s2_gravity_well() -> void:
 	var tier := primary_tier
-	var dest := _target_clamped(205.0 + float(tier) * 16.0)
-	await _arc_shot_from(origin, dest, 42.0 + float(tier) * 8.0, 0.30, Color(1.1, 2.35, 3.25, 1.0), Color(0.18, 0.65, 1.5, 1.0), 9.0)
+	var max_range := 205.0 + float(tier) * 16.0
+
+	var locked_target := _nearest_enemy_to_aim(
+		target,
+		76.0,
+		max_range
+	)
+
+	var tracking_target_id := 0
+	var dest := _target_clamped(max_range)
+
+	if locked_target != null and is_instance_valid(locked_target):
+		tracking_target_id = locked_target.get_instance_id()
+		dest = locked_target.global_position.round()
+
+		_show_target_lock(
+			dest,
+			Color(1.2, 2.7, 3.4, 1.0),
+			Color(0.2, 0.7, 1.6, 1.0)
+		)
+
+	dest = await _arc_shot_from(
+		origin,
+		dest,
+		38.0 + float(tier) * 7.0,
+		0.24,
+		Color(1.1, 2.35, 3.25, 1.0),
+		Color(0.18, 0.65, 1.5, 1.0),
+		9.0,
+		tracking_target_id
+	)
+
 	var radius := 58.0 + float(tier) * 12.0
-	var collapse_steps := 3 + (1 if tier >= 2 else 0)
+
+	var collapse_steps := (
+		3
+		+ (1 if tier >= 2 else 0)
+	)
+
 	for i in range(collapse_steps):
-		var r := lerpf(radius, 16.0, float(i) / float(maxi(1, collapse_steps - 1)))
-		_pulse_ring(dest, r, Color(0.85, 2.2, 3.1, 1.0), Color(0.15, 0.55, 1.4, 0.25), 0.12, 26, float(i) * 0.10)
+		var r := lerpf(
+			radius,
+			16.0,
+			float(i)
+				/ float(maxi(1, collapse_steps - 1))
+		)
+
+		_pulse_ring(
+			dest,
+			r,
+			Color(0.85, 2.2, 3.1, 1.0),
+			Color(0.15, 0.55, 1.4, 0.25),
+			0.12,
+			26,
+			float(i) * 0.10
+		)
+
 		await _sleep(0.045)
-	_radial_hit(dest, radius, false)
+
+	_radial_hit(
+		dest,
+		radius,
+		false
+	)
+
 	await _sleep(0.06)
-	_explode(dest, Color(1.45, 2.75, 3.35, 1.0), Color(0.2, 0.7, 1.55, 1.0), 18.0 + float(tier) * 2.0, 20.0 + float(tier) * 4.0)
+
+	_explode(
+		dest,
+		Color(1.45, 2.75, 3.35, 1.0),
+		Color(0.2, 0.7, 1.55, 1.0),
+		18.0 + float(tier) * 2.0,
+		20.0 + float(tier) * 4.0
+	)
+
 	if tier >= 3:
 		await _sleep(0.08)
-		_radial_hit(dest, radius * 0.85, false)
-		_explode(dest, Color(1.8, 3.0, 3.5, 1.0), Color(0.2, 0.75, 1.65, 1.0), 15.0, 18.0)
 
+		_radial_hit(
+			dest,
+			radius * 0.85,
+			false
+		)
+
+		_explode(
+			dest,
+			Color(1.8, 3.0, 3.5, 1.0),
+			Color(0.2, 0.75, 1.65, 1.0),
+			15.0,
+			18.0
+		)
+		
 # S2 SECONDARY: MASS EJECTION
 func _s2_mass_ejection() -> void:
 	var tier := secondary_tier

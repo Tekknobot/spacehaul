@@ -60,11 +60,11 @@ Secondary: COUNTERSHOCK - heavy radial cannon blasts from the player.
 3. Ten directions and more range.
 
 ### R3
-Primary: SWARM RACK - compact arcing missile cluster around the aimed zone.
+Primary: HUNTER MISSILES - compact arcing missile cluster around the aimed zone.
 1. Four missiles.
 2. Five missiles.
 3. Six missiles and more reach.
-Secondary: FLAK DOME - arcing missiles launch from the player and detonate around a protective ring.
+Secondary: MISSILE HALO - arcing missiles launch from the player and detonate around a protective ring.
 1. More flak missiles.
 2. More flak missiles and radius.
 3. Maximum dome density and radius.
@@ -111,3 +111,7 @@ Secondary: PHASE BLOOM - repeated phase rings, pixel afterimages, and perimeter 
 
 ## Upgrade model
 Each primary and secondary has three chassis-specific evolution tiers. They are added directly to the salvage level-up pool alongside cooldown, impact radius, hull, servo, repair, and salvage magnet upgrades. The primary evolution is available immediately; the secondary evolution enters the pool only after the secondary system unlocks.
+
+
+## ARC TARGETING UPDATE
+M3 COMET MORTAR, R3 HUNTER MISSILES, and S2 GRAVITY WELL now soft-lock the nearest living enemy close to the cursor and within weapon range. Their 1px arcing projectiles track that target during flight, then use the existing explosion impact. If no enemy is near the cursor, they still fire at the exact ground point selected by the player.
