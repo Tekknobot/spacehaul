@@ -11,6 +11,19 @@ const SFX = preload("res://Scripts/sound_fx.gd")
 const GAMEPAD_AIM_DEADZONE := 0.28
 
 
+const MECHA_DISPLAY_NAMES := {
+	"M1": "ATLAS",
+	"M2": "PANTHER",
+	"M3": "COMET",
+	"R1": "PRISM",
+	"R2": "BREACHER",
+	"R3": "HUNTER",
+	"R4": "CASCADE",
+	"S1": "SOLARIS",
+	"S2": "PHANTOM",
+	"S3": "SPIDER",
+}
+
 const MAX_ABILITY_TIER := 3
 const ABILITY_NAMES := {
 	"M1": {"primary": "PLASMA CLEAVER", "secondary": "REPULSOR BURST"},
@@ -241,7 +254,7 @@ func get_speed() -> float:
 	return velocity.length()
 
 func get_display_name() -> String:
-	return mecha_id
+	return String(MECHA_DISPLAY_NAMES.get(mecha_id, mecha_id))
 
 func get_hull() -> int:
 	return hull

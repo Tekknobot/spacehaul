@@ -372,37 +372,61 @@ func _set_deck_transition_overlay_amount(value: float) -> void:
 func _update_hud() -> void:
 	if _hud_mecha == null:
 		return
+
 	var active := mecha_manager.get_active_mecha()
+
 	if active == null:
 		_hud_mecha.text = "NO MECHA"
-		_hud_hull.text = "HULL NA"
-		_hud_level.text = "LV %02d" % _level
-		_hud_salvage.text = "SALV %02d OF %02d" % [_salvage, _salvage_required]
+		_hud_hull.text = "HULL: NA"
+		_hud_level.text = "LV: %02d" % _level
+		_hud_salvage.text = "SALV: %02d/%02d" % [_salvage, _salvage_required]
 		_hud_time.text = _format_time(_run_time)
-		_hud_deck.text = "DECK %d  %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)]
-		_hud_hostiles.text = "FOES %02d" % enemy_manager.get_alive_count()
+		_hud_deck.text = "DECK: %d %s" % [
+			_deck_number,
+			deck.get_deck_palette_name(_deck_number)
+		]
+		_hud_hostiles.text = "FOES: %02d" % enemy_manager.get_alive_count()
 		return
 
 	_hud_mecha.text = mecha_manager.get_active_mecha_name()
-	_hud_hull.text = "HULL %03d OF %03d" % [active.get_hull(), active.get_max_hull()]
+	_hud_hull.text = "HULL %03d/%03d" % [
+		active.get_hull(),
+		active.get_max_hull()
+	]
 	_hud_level.text = "LV %02d" % _level
-	_hud_salvage.text = "SALV %02d OF %02d" % [_salvage, _salvage_required]
+	_hud_salvage.text = "SALV %02d/%02d" % [
+		_salvage,
+		_salvage_required
+	]
 	_hud_time.text = _format_time(_run_time)
-	_hud_deck.text = "DECK %d  %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)]
+	_hud_deck.text = "DECK %d %s" % [
+		_deck_number,
+		deck.get_deck_palette_name(_deck_number)
+	]
 	_hud_hostiles.text = "FOES %02d" % enemy_manager.get_alive_count()
 
 	var hull_ratio := float(active.get_hull()) / float(maxi(1, active.get_max_hull()))
-	if hull_ratio <= 0.30:
-		_hud_hull.add_theme_color_override("font_color", Color(1.0, 0.34, 0.28, 1.0))
-	elif hull_ratio <= 0.60:
-		_hud_hull.add_theme_color_override("font_color", Color(1.0, 0.72, 0.28, 1.0))
-	else:
-		_hud_hull.add_theme_color_override("font_color", Color(0.45, 1.0, 0.72, 1.0))
 
+	if hull_ratio <= 0.30:
+		_hud_hull.add_theme_color_override(
+			"font_color",
+			Color(1.0, 0.34, 0.28, 1.0)
+		)
+	elif hull_ratio <= 0.60:
+		_hud_hull.add_theme_color_override(
+			"font_color",
+			Color(1.0, 0.72, 0.28, 1.0)
+		)
+	else:
+		_hud_hull.add_theme_color_override(
+			"font_color",
+			Color(0.45, 1.0, 0.72, 1.0)
+		)
+		
 func _format_time(seconds: float) -> String:
 	var total := maxi(0, int(floor(seconds)))
-	return "%02d %02d" % [int(total / 60), total % 60]
-
+	return "%02d:%02d" % [int(total / 60), total % 60]
+	
 func _hide_legacy_hud() -> void:
 	# Keep the old scene nodes as harmless placeholders so existing scene UIDs stay
 	# stable, but never show them. A dedicated menu can reuse them later.
