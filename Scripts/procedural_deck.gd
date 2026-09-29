@@ -34,6 +34,7 @@ const FLOOR_TILE_WEIGHTS: Array[float] = [
 const FLOOR_FEATURE_START_INDEX := 8
 
 const DECK_PALETTE_SHADER: Shader = preload("res://Shaders/deck_palette.gdshader")
+const HAZARD_GAS_SCRIPT: GDScript = preload("res://Scripts/hazard_gas.gd")
 const WALL_TEXTURES: Array[Texture2D] = [
 	preload("res://Sprites/Tiles/WallTiles/wall_1.png"),
 	preload("res://Sprites/Tiles/WallTiles/wall_2.png"),
@@ -519,36 +520,13 @@ func _rebuild_overlay_visuals() -> void:
 
 	for cell in _hazard_cells:
 		var hazard_center := _cell_center(cell)
-
-		# Hazards no longer replace the floor art. A translucent warning diamond and
-		# two interior bars sit above whichever FloorTiles texture was chosen.
-		var fill := Polygon2D.new()
-		fill.name = "HazardFill_%d_%d" % [cell.x, cell.y]
-		fill.position = hazard_center
-		fill.polygon = _diamond_points(Vector2.ZERO, tile_width - 5.0, tile_height - 3.0)
-		fill.color = Color(accent.r, accent.g, accent.b, 0.10)
-		_overlay_visual_root.add_child(fill)
-
-		var outline := Line2D.new()
-		outline.name = "HazardOutline_%d_%d" % [cell.x, cell.y]
-		outline.position = hazard_center
-		outline.points = _closed_polygon(_diamond_points(Vector2.ZERO, tile_width - 2.0, tile_height - 1.0))
-		outline.width = 1.0
-		outline.default_color = accent.lightened(0.20)
-		outline.antialiased = false
-		_overlay_visual_root.add_child(outline)
-
-		for segment in [
-			PackedVector2Array([Vector2(-10.0, -4.0), Vector2(10.0, 4.0)]),
-			PackedVector2Array([Vector2(-10.0, 4.0), Vector2(10.0, -4.0)]),
-		]:
-			var warning_bar := Line2D.new()
-			warning_bar.position = hazard_center
-			warning_bar.points = segment
-			warning_bar.width = 1.0
-			warning_bar.default_color = Color(accent.r, accent.g, accent.b, 0.72)
-			warning_bar.antialiased = false
-			_overlay_visual_root.add_child(warning_bar)
+		var gas := Node2D.new()
+		gas.set_script(HAZARD_GAS_SCRIPT)
+		gas.name = "HazardGas_%d_%d" % [cell.x, cell.y]
+		gas.position = hazard_center
+		_overlay_visual_root.add_child(gas)
+		if gas.has_method("setup"):
+			gas.call("setup", tile_width, tile_height, seed_value ^ int(cell.x * 92821 + cell.y * 68917))
 
 	var center := _cell_center(_start_cell)
 	var outer_points := _diamond_points(Vector2.ZERO, 34.0, 18.0)
