@@ -56,6 +56,7 @@ var _low_hull_warned := false
 var _run_summary_overlay: Control
 var _run_summary_title: Label
 var _run_summary_text: Label
+var _run_summary_menu_button: Button
 var _deck_transition_active := false
 var _deck_transition_overlay: ColorRect
 var _deck_transition_overlay_material: ShaderMaterial
@@ -216,18 +217,14 @@ func _on_player_destroyed(_mecha: MechaController) -> void:
 	enemy_manager.set_spawning_enabled(false)
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
-	var result := "LAST RUN   %s   KILLS %03d   LV %02d" % [_format_time(_run_time), enemy_manager.get_total_kills(), _level]
-	_record_and_get_best_time(_run_time)
-	_show_mecha_select("MECHA LOST   //   " + result)
+	_show_run_summary(false)
 
 func _complete_run() -> void:
 	if _run_complete:
 		return
 	_run_complete = true
 	enemy_manager.set_spawning_enabled(false)
-	var result := "LAST RUN   %s   KILLS %03d   LV %02d" % [_format_time(_run_time), enemy_manager.get_total_kills(), _level]
-	_record_and_get_best_time(_run_time)
-	_show_mecha_select("EXTRACTION COMPLETE   //   " + result)
+	_show_run_summary(true)
 
 func _restart_run() -> void:
 	_start_selected_run()
@@ -923,27 +920,71 @@ func _build_run_summary_overlay() -> void:
 	_run_summary_text.add_theme_color_override("font_color", Color(0.82, 0.89, 0.93, 1.0))
 	box.add_child(_run_summary_text)
 
-	var hint := Label.new()
-	hint.text = "G RB   NEW RUN"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	hint.add_theme_font_size_override("font_size", 16)
-	hint.add_theme_color_override("font_color", Color(0.52, 0.72, 0.78, 1.0))
-	box.add_child(hint)
+	_run_summary_menu_button = Button.new()
+	_run_summary_menu_button.custom_minimum_size = Vector2(0.0, 42.0)
+	_run_summary_menu_button.text = "MAIN MENU"
+	_run_summary_menu_button.focus_mode = Control.FOCUS_ALL
+	_run_summary_menu_button.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
+	_run_summary_menu_button.add_theme_font_size_override("font_size", 20)
+	_run_summary_menu_button.add_theme_color_override("font_color", Color(0.68, 0.96, 1.0, 1.0))
+	_run_summary_menu_button.add_theme_color_override("font_hover_color", Color(0.82, 1.0, 1.0, 1.0))
+	_run_summary_menu_button.add_theme_color_override("font_pressed_color", Color(0.52, 0.82, 0.88, 1.0))
+
+	var button_normal := StyleBoxFlat.new()
+	button_normal.bg_color = Color(0.018, 0.035, 0.046, 0.96)
+	button_normal.border_width_left = 1
+	button_normal.border_width_top = 1
+	button_normal.border_width_right = 1
+	button_normal.border_width_bottom = 1
+	button_normal.border_color = Color(0.18, 0.48, 0.56, 0.92)
+	button_normal.corner_radius_top_left = 3
+	button_normal.corner_radius_top_right = 3
+	button_normal.corner_radius_bottom_left = 3
+	button_normal.corner_radius_bottom_right = 3
+	_run_summary_menu_button.add_theme_stylebox_override("normal", button_normal)
+
+	var button_hover := button_normal.duplicate() as StyleBoxFlat
+	button_hover.bg_color = Color(0.026, 0.060, 0.074, 0.98)
+	button_hover.border_color = Color(0.28, 0.76, 0.84, 0.98)
+	_run_summary_menu_button.add_theme_stylebox_override("hover", button_hover)
+
+	var button_pressed := button_normal.duplicate() as StyleBoxFlat
+	button_pressed.bg_color = Color(0.012, 0.027, 0.036, 1.0)
+	button_pressed.border_color = Color(0.22, 0.62, 0.70, 0.98)
+	_run_summary_menu_button.add_theme_stylebox_override("pressed", button_pressed)
+	_run_summary_menu_button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	_run_summary_menu_button.pressed.connect(_return_to_main_menu)
+	box.add_child(_run_summary_menu_button)
 
 func _show_run_summary(completed: bool) -> void:
 	if _run_summary_overlay == null:
 		return
+	_menu_open = true
+	get_tree().paused = true
+	enemy_manager.set_spawning_enabled(false)
+	if _upgrade_overlay != null:
+		_upgrade_overlay.hide()
+	if _mecha_select_overlay != null:
+		_mecha_select_overlay.hide()
+	if deck_banner != null:
+		deck_banner.hide()
+	_set_standard_hud_visible(false)
+
 	var active := mecha_manager.get_active_mecha()
 	var chassis := mecha_manager.get_active_mecha_name()
 	if active == null and chassis == "NONE":
 		chassis = "MECHA"
 	var best := _record_and_get_best_time(_run_time)
-	_run_summary_title.text = "EXTRACTION COMPLETE" if completed else "MECHA LOST"
+	_run_summary_title.text = "EXTRACTION COMPLETE" if completed else "GAME OVER   //   MECHA LOST"
 	_run_summary_text.text = "SURVIVED   %s\nKILLS      %03d\nLEVEL      %02d\nDECK       %02d\nCHASSIS    %s\nBEST       %s" % [
 		_format_time(_run_time), enemy_manager.get_total_kills(), _level, _deck_number, chassis, _format_time(best)
 	]
 	_run_summary_overlay.show()
+	if _run_summary_menu_button != null:
+		_run_summary_menu_button.grab_focus()
+
+func _return_to_main_menu() -> void:
+	_show_mecha_select("SELECT A CHASSIS")
 
 func _record_and_get_best_time(value: float) -> float:
 	var config := ConfigFile.new()
