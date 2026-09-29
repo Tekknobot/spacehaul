@@ -346,11 +346,110 @@ func _particle_color(p: Dictionary) -> Color:
 			color = _core.lerp(Color(0.95, 0.55 + shift * 0.35, 1.0, 1.0), 0.28)
 	return Color(color.r, color.g, color.b, color.a * fade)
 
+func _gas_profile_scale() -> float:
+	# Keep each cloud only a few world pixels wider than its 2x2 source pixel.
+	# Hot / exhaust-style abilities carry a little more body, while sparks and
+	# electricity stay tight so the gas never swallows the authored pixel.
+	match _profile:
+		"sparks", "electric":
+			return 0.78
+		"exhaust":
+			return 1.28
+		"ember", "solar":
+			return 1.16
+		"gravity":
+			return 1.22
+		"phase", "prism":
+			return 0.94
+		_:
+			return 1.0
+
+func _gas_tint(particle_color: Color) -> Color:
+	# Ability colors are often HDR (>1.0) for bloom. Hazard gas is intentionally
+	# translucent, so normalize that energy before using it as a cloud tint.
+	var source := _glow if _glow.a > 0.0 else particle_color
+	var peak := maxf(source.r, maxf(source.g, source.b))
+	if peak > 1.0:
+		source.r /= peak
+		source.g /= peak
+		source.b /= peak
+	return Color(
+		clampf(source.r, 0.0, 1.0),
+		clampf(source.g, 0.0, 1.0),
+		clampf(source.b, 0.0, 1.0),
+		1.0
+	)
+
+func _even_pixel_size(value: float, minimum: float, maximum: float) -> float:
+	return clampf(round(value * 0.5) * 2.0, minimum, maximum)
+
+func _draw_particle_gas(p: Dictionary, pos: Vector2, particle_color: Color) -> void:
+	var life := maxf(float(p["life"]), 0.001)
+	var age := float(p["age"])
+	var t := clampf(age / life, 0.0, 1.0)
+	var fade := 1.0 - t
+	if fade <= 0.001:
+		return
+
+	var scale_factor := _gas_profile_scale()
+	var phase := float(p["phase"])
+	var pulse := 0.92 + sin(phase + age * 4.0) * 0.08
+	var gas_color := _gas_tint(particle_color)
+
+	# Trail the gas by a pixel or two behind the moving particle. This keeps the
+	# cloud visually attached to its source while echoing the hazard-tile puffs.
+	var velocity := Vector2(p["velocity"])
+	var tail := Vector2.ZERO
+	if velocity.length_squared() > 0.01:
+		tail = -velocity.normalized() * minf(2.0, 0.7 + velocity.length() * 0.018)
+	tail = tail.round()
+
+	var outer_size := Vector2(
+		_even_pixel_size(PIXEL_SIZE * 2.7 * scale_factor * pulse, 4.0, 8.0),
+		_even_pixel_size(PIXEL_SIZE * 2.0 * scale_factor * pulse, 4.0, 6.0)
+	)
+	var mid_size := Vector2(
+		_even_pixel_size(PIXEL_SIZE * 2.0 * scale_factor, 4.0, 6.0),
+		_even_pixel_size(PIXEL_SIZE * 1.5 * scale_factor, 2.0, 4.0)
+	)
+	var core_size := Vector2(
+		_even_pixel_size(PIXEL_SIZE * 1.45 * scale_factor, 2.0, 4.0),
+		_even_pixel_size(PIXEL_SIZE * 1.15 * scale_factor, 2.0, 4.0)
+	)
+
+	var wobble := Vector2(
+		round(sin(phase + age * 3.2)),
+		round(cos(phase * 0.7 + age * 2.4))
+	)
+	var outer_center := pos + tail
+	var mid_center := pos + (tail * 0.5).round() + wobble
+	var core_center := pos - wobble
+
+	# Opacity is in the same restrained range as the hazard tile cloud. Three
+	# overlapping hard-edged puffs give the impression of gas without blurring
+	# the 2x2 floating pixel at the center.
+	draw_rect(
+		Rect2((outer_center - outer_size * 0.5).round(), outer_size),
+		Color(gas_color.r, gas_color.g, gas_color.b, 0.075 * fade),
+		true
+	)
+	draw_rect(
+		Rect2((mid_center - mid_size * 0.5).round(), mid_size),
+		Color(gas_color.r, gas_color.g, gas_color.b, 0.11 * fade),
+		true
+	)
+	draw_rect(
+		Rect2((core_center - core_size * 0.5).round(), core_size),
+		Color(gas_color.r, gas_color.g, gas_color.b, 0.15 * fade),
+		true
+	)
+
 func _draw() -> void:
 	for p in _particles:
 		var pos: Vector2 = Vector2(p["position"]).round()
 		var color := _particle_color(p)
-		# Strict hard-edged world-pixel squares. No textures, filtering, circles or AA.
+		_draw_particle_gas(p, pos, color)
+		# Strict hard-edged world-pixel square remains the brightest focal point.
 		draw_rect(
 			Rect2(pos - Vector2.ONE, Vector2(PIXEL_SIZE, PIXEL_SIZE)),
 			color,

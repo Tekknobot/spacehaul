@@ -243,7 +243,7 @@ func _spark_pixels(at: Vector2, core: Color, glow: Color, count: int, travel_rad
 	for i in range(maxi(0, count)):
 		var pixel := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(pixel)
-		pixel.setup(at, core, glow, 1.0)
+		pixel.setup(at, core, glow, 1.0, true)
 		var angle := TAU * float(i) / float(maxi(1, count)) + _rng.randf_range(-0.16, 0.16)
 		var distance := travel_radius * _rng.randf_range(0.55, 1.0)
 		var destination := (at + Vector2(cos(angle), sin(angle)) * distance).round()
