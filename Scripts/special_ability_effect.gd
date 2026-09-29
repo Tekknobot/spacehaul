@@ -614,34 +614,324 @@ func _chain_enemy_points(max_hops: int, first_range: float, jump_range: float) -
 
 # M1 PRIMARY: PLASMA CLEAVER
 # A short, hard-edged crescent that chews through the crowd in front of M1.
+func _m1_traveling_cleaver_wave(
+	start_radius: float,
+	end_radius: float,
+	start_half_angle: float,
+	end_half_angle: float,
+	teeth: int,
+	travel_time: float,
+	hit_radius: float,
+	core: Color,
+	glow: Color
+) -> void:
+	var hit_ids: Dictionary = {}
+	var step_count := 12
+
+	var final_arc := PackedVector2Array()
+
+	for step in range(step_count):
+		var t := float(step) / float(maxi(1, step_count - 1))
+
+		var radius := lerpf(
+			start_radius,
+			end_radius,
+			t
+		)
+
+		var half_angle := lerpf(
+			start_half_angle,
+			end_half_angle,
+			t
+		)
+
+		var arc := _arc_points(
+			owner_ground,
+			direction.angle(),
+			radius,
+			half_angle,
+			teeth
+		)
+
+		final_arc = arc
+
+		var blade := _polyline(
+			arc,
+			core,
+			glow
+		)
+
+		blade.z_index = clampi(
+			int(round(owner_ground.y)) + 5,
+			-3000,
+			3000
+		)
+
+		_fade_free(
+			blade,
+			0.075
+		)
+
+		if get_world_2d() != null:
+			var shape := CircleShape2D.new()
+			shape.radius = hit_radius
+
+			var query := PhysicsShapeQueryParameters2D.new()
+			query.shape = shape
+			query.collision_mask = 2
+			query.collide_with_bodies = true
+			query.collide_with_areas = true
+
+			for point in arc:
+				query.transform = Transform2D(
+					0.0,
+					point
+				)
+
+				for hit in get_world_2d().direct_space_state.intersect_shape(
+					query,
+					32
+				):
+					var collider := hit.get("collider") as Object
+
+					if collider == null:
+						continue
+
+					if not collider.has_method("take_projectile_hit"):
+						continue
+
+					var id := collider.get_instance_id()
+
+					if hit_ids.has(id):
+						continue
+
+					var body := collider as Node2D
+
+					if body != null:
+						if not IsoVfx.inside_ground_radius(
+							point,
+							body.global_position,
+							hit_radius
+						):
+							continue
+
+					hit_ids[id] = true
+
+					var push := direction
+
+					if body != null:
+						push = body.global_position - owner_ground
+
+						if push.length_squared() <= 0.001:
+							push = direction
+
+					collider.call(
+						"take_projectile_hit",
+						push.normalized()
+					)
+
+					# Contact explosion.
+					#
+					# This is deliberately visual-only because the enemy
+					# has already received the cleaver hit above.
+					var impact_position := point
+
+					if body != null:
+						impact_position = body.global_position
+
+					_ability_impact_fx(
+						impact_position,
+						Color(
+							3.0,
+							1.55,
+							0.55,
+							1.0
+						),
+						Color(
+							1.5,
+							0.40,
+							0.08,
+							1.0
+						),
+						8.0
+					)
+
+		# Plasma debris along the moving blade.
+		if step % 2 == 0:
+			var tip := (
+				owner_ground
+				+ IsoVfx.ground_vector(
+					direction,
+					radius
+				)
+			).round()
+
+			_spark_pixels(
+				tip,
+				core,
+				Color(
+					glow.r,
+					glow.g,
+					glow.b,
+					1.0
+				),
+				2,
+				8.0,
+				0.16
+			)
+
+		await _sleep(
+			travel_time / float(step_count)
+		)
+
+	# Restore the original Plasma Cleaver's three-point impact language.
+	#
+	# The final wave detonates at:
+	# - one end of the crescent
+	# - the center
+	# - the opposite end
+	if final_arc.size() >= 3:
+		var impact_indices := [
+			0,
+			int(final_arc.size() / 2),
+			final_arc.size() - 1
+		]
+
+		for index in impact_indices:
+			var point := final_arc[index]
+
+			_explode(
+				point,
+				Color(
+					3.0,
+					1.5,
+					0.55,
+					1.0
+				),
+				Color(
+					1.5,
+					0.40,
+					0.08,
+					1.0
+				),
+				10.0 + float(primary_tier),
+				9.0 + float(primary_tier)
+			)
+
+	# Final plasma breakup.
+	var final_tip := (
+		owner_ground
+			+ IsoVfx.ground_vector(
+				direction,
+				end_radius
+			)
+	).round()
+
+	_spark_pixels(
+		final_tip,
+		core,
+		Color(
+			glow.r,
+			glow.g,
+			glow.b,
+			1.0
+		),
+		6,
+		18.0,
+		0.22
+	)
+	
+func _ability_impact_fx(
+	at: Vector2,
+	core: Color,
+	glow: Color,
+	radius: float
+) -> void:
+	var fx := ExplosionScript.new() as SpacehaulSpecialExplosion
+	root.add_child(fx)
+
+	fx.setup(
+		at.round(),
+		core,
+		glow,
+		radius * impact_scale
+	)
+
+	_spawn_impact_particles(
+		at,
+		core,
+		glow,
+		radius * impact_scale
+	)
+		
+# M1 PRIMARY: PLASMA CLEAVER
+# A travelling isometric plasma crescent that cuts forward through crowds.
 func _m1_plasma_cleaver() -> void:
 	var tier := primary_tier
-	var radius := 66.0 + float(tier) * 8.0
-	var half_angle := deg_to_rad(36.0 + float(tier) * 6.0)
-	var teeth := 7 + tier * 2
-	var arc := _arc_points(owner_center, direction.angle(), radius, half_angle, teeth)
-	var blade := _polyline(arc, Color(3.0, 1.45, 0.55, 1.0), Color(1.5, 0.42, 0.10, 0.30))
-	for i in range(arc.size()):
-		_damage_radius(arc[i], 9.0 + float(tier), direction)
-		if i == 0 or i == int(arc.size() / 2) or i == arc.size() - 1:
-			_explode(arc[i], Color(3.0, 1.5, 0.55, 1.0), Color(1.5, 0.40, 0.08, 1.0), 10.0 + float(tier), 9.0 + float(tier))
-	_fade_free(blade, 0.16)
-	_spark_pixels(owner_center + IsoVfx.ground_vector(direction, radius * 0.65), Color(3.0, 1.8, 0.75, 1.0), Color(1.5, 0.45, 0.1, 1.0), 5 + tier * 2, 18.0)
-	if tier >= 2:
-		await _sleep(0.07)
-		var outer := _arc_points(owner_center, direction.angle(), radius + 15.0, half_angle * 0.88, teeth)
-		var second := _polyline(outer, Color(2.8, 1.0, 0.35, 1.0), Color(1.3, 0.30, 0.08, 0.26))
-		for p in outer:
-			_damage_radius(p, 8.0 + float(tier), direction)
-		_fade_free(second, 0.14)
-	if tier >= 3:
-		await _sleep(0.06)
-		var return_arc := _arc_points(owner_center, direction.angle(), radius * 0.78, half_angle * 1.12, teeth + 2)
-		var backcut := _polyline(return_arc, Color(3.1, 2.0, 0.8, 1.0), Color(1.5, 0.5, 0.1, 0.25))
-		for p in return_arc:
-			_damage_radius(p, 8.0, -direction)
-		_fade_free(backcut, 0.12)
 
+	# Start almost directly in front of Atlas instead of spawning the blade
+	# at its maximum range.
+	var start_radius := 22.0
+
+	# Each upgrade gives the weapon noticeably more forward reach.
+	var end_radius := 132.0 + float(tier) * 14.0
+
+	var start_half_angle := deg_to_rad(
+		27.0 + float(tier) * 2.0
+	)
+
+	var end_half_angle := deg_to_rad(
+		36.0 + float(tier) * 5.0
+	)
+
+	var teeth := 7 + tier * 2
+
+	await _m1_traveling_cleaver_wave(
+		start_radius,
+		end_radius,
+		start_half_angle,
+		end_half_angle,
+		teeth,
+		0.22,
+		9.0 + float(tier),
+		Color(3.0, 1.45, 0.55, 1.0),
+		Color(1.5, 0.42, 0.10, 0.30)
+	)
+
+	# Tier 2: a hotter, narrower second wave punches farther through
+	# whatever survived the first cleave.
+	if tier >= 2:
+		await _sleep(0.045)
+
+		await _m1_traveling_cleaver_wave(
+			28.0,
+			end_radius + 18.0,
+			start_half_angle * 0.82,
+			end_half_angle * 0.88,
+			teeth + 2,
+			0.17,
+			8.0 + float(tier),
+			Color(2.9, 1.05, 0.32, 1.0),
+			Color(1.35, 0.30, 0.07, 0.28)
+		)
+
+	# Tier 3: a larger overcharged echo follows the attack and opens the
+	# cleaver into a much stronger crowd-clearing weapon.
+	if tier >= 3:
+		await _sleep(0.04)
+
+		await _m1_traveling_cleaver_wave(
+			34.0,
+			end_radius + 32.0,
+			start_half_angle,
+			end_half_angle * 1.18,
+			teeth + 4,
+			0.18,
+			9.0,
+			Color(3.2, 2.0, 0.8, 1.0),
+			Color(1.6, 0.5, 0.10, 0.30)
+		)
+		
 # M1 SECONDARY: REPULSOR BURST
 func _m1_repulsor_burst() -> void:
 	var tier := secondary_tier
