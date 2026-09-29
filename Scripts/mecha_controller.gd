@@ -94,6 +94,8 @@ var _attack_projectile_pending := false
 var _attack_direction := Vector2.RIGHT
 var _attack_target := Vector2.ZERO
 var _attack_alternate := false
+var _attack_fire_delay_left := 0.0
+var _attack_duration_left := 0.0
 var _primary_cooldown := 0.75
 var _secondary_cooldown := 5.0
 var _primary_cooldown_left := 0.0
@@ -138,6 +140,7 @@ func _physics_process(delta: float) -> void:
 	_primary_cooldown_left = maxf(0.0, _primary_cooldown_left - delta)
 	_secondary_cooldown_left = maxf(0.0, _secondary_cooldown_left - delta)
 	_boost_cooldown_left = maxf(0.0, _boost_cooldown_left - delta)
+	_update_attack_state(delta)
 	_update_camera_shake(delta)
 
 	if _hurt_time > 0.0:
@@ -172,6 +175,8 @@ func set_player_controlled(value: bool) -> void:
 			add_to_group("player_mecha")
 		attacking = false
 		_attack_projectile_pending = false
+		_attack_fire_delay_left = 0.0
+		_attack_duration_left = 0.0
 		velocity = Vector2.ZERO
 		_play_if_needed("idle")
 	else:
@@ -184,6 +189,8 @@ func teleport_to(value: Vector2) -> void:
 	velocity = Vector2.ZERO
 	attacking = false
 	_attack_projectile_pending = false
+	_attack_fire_delay_left = 0.0
+	_attack_duration_left = 0.0
 	_primary_cooldown_left = minf(_primary_cooldown_left, 0.25)
 	_secondary_cooldown_left = minf(_secondary_cooldown_left, 0.5)
 	if not _dead:
@@ -196,6 +203,8 @@ func begin_deck_transition() -> void:
 	velocity = Vector2.ZERO
 	attacking = false
 	_attack_projectile_pending = false
+	_attack_fire_delay_left = 0.0
+	_attack_duration_left = 0.0
 	_boost_time = 0.0
 	if marker != null:
 		marker.visible = false
@@ -366,6 +375,30 @@ func take_projectile_hit(direction: Vector2, amount: int = 10) -> void:
 	if direction.length_squared() > 0.001 and not _dead:
 		velocity += direction.normalized() * 45.0
 
+func _update_attack_state(delta: float) -> void:
+	if not attacking:
+		return
+
+	_attack_fire_delay_left = maxf(0.0, _attack_fire_delay_left - delta)
+	_attack_duration_left = maxf(0.0, _attack_duration_left - delta)
+
+	# Ability timing is independent from the visible sprite animation. This lets
+	# the chassis keep its walking cycle while firing instead of sliding on
+	# motionless attack legs.
+	if _attack_projectile_pending and _attack_fire_delay_left <= 0.0:
+		_attack_projectile_pending = false
+		SFX.play(
+			self,
+			"secondary" if _attack_alternate else "primary",
+			-10.0 if not _attack_alternate else -7.5,
+			_rng.randf_range(0.97, 1.04)
+		)
+		_spawn_special_ability(_attack_direction)
+
+	if _attack_duration_left <= 0.0:
+		attacking = false
+		_attack_projectile_pending = false
+
 func _process_player(delta: float) -> void:
 	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attack_direction := _get_attack_direction()
@@ -399,10 +432,20 @@ func _process_player(delta: float) -> void:
 
 		if move_input.length_squared() > 0.02:
 			last_move_direction = move_input.normalized()
-			if not attacking:
+			if attacking:
+				# Aim controls the torso/facing direction, but locomotion keeps the
+				# walking frames so the legs never freeze while the mecha is moving.
+				_update_facing(_attack_direction)
+			else:
 				_update_facing(last_move_direction)
-				_play_if_needed("move")
-		elif not attacking:
+			_play_if_needed("move")
+		elif attacking:
+			_update_facing(_attack_direction)
+			# If the player stops during a moving attack, switch to the firing pose.
+			# Do not restart a finished attack animation while the logical timer expires.
+			if animated_sprite.animation != &"attack":
+				animated_sprite.play("attack")
+		else:
 			_update_facing(last_move_direction)
 			_play_if_needed("idle")
 
@@ -513,28 +556,32 @@ func _start_attack(direction: Vector2, launch_projectile: bool) -> void:
 	_update_facing(_attack_direction)
 	attacking = true
 	_attack_projectile_pending = launch_projectile
-	_attack_fire_frame = maxi(0, int(animated_sprite.sprite_frames.get_frame_count("attack") / 2) - 1)
-	animated_sprite.play("attack")
+
+	# Keep approximately the same wind-up and total attack duration that the
+	# authored attack animation used, but do not require that animation to be
+	# visible for the ability to fire.
+	var attack_frames := maxi(1, animated_sprite.sprite_frames.get_frame_count("attack"))
+	var attack_fps := maxf(1.0, animated_sprite.sprite_frames.get_animation_speed("attack"))
+	_attack_fire_frame = maxi(0, int(attack_frames / 2) - 1)
+	_attack_fire_delay_left = float(_attack_fire_frame) / attack_fps
+	_attack_duration_left = float(attack_frames) / attack_fps
+
+	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	if move_input.length_squared() > 0.02:
+		# Locomotion wins visually while moving. Ability spawn timing is handled
+		# by _update_attack_state(), not by AnimatedSprite2D.frame_changed.
+		animated_sprite.play("move")
+	else:
+		animated_sprite.play("attack")
 
 func _on_frame_changed() -> void:
-	if not attacking or not _attack_projectile_pending or _dead:
-		return
-	if animated_sprite.animation != &"attack":
-		return
-	if animated_sprite.frame >= _attack_fire_frame:
-		_attack_projectile_pending = false
-		# Fire audio on the exact frame that creates the ability instead of at
-		# animation start, keeping muzzle/impact timing coherent.
-		SFX.play(self, "secondary" if _attack_alternate else "primary", -10.0 if not _attack_alternate else -7.5, _rng.randf_range(0.97, 1.04))
-		_spawn_special_ability(_attack_direction)
+	# Ability firing is intentionally no longer tied to attack animation frames.
+	pass
 
 func _on_animation_finished() -> void:
-	if animated_sprite.animation == &"attack":
-		attacking = false
-		_attack_projectile_pending = false
-		if is_player_controlled and not _dead:
-			_update_facing(_attack_direction)
-			animated_sprite.play("idle")
+	# Logical attack completion is handled by _update_attack_state(). Keeping this
+	# callback connected is harmless and avoids changing the scene setup contract.
+	pass
 
 func _spawn_special_ability(direction: Vector2) -> void:
 	var root := get_tree().current_scene
@@ -588,7 +635,11 @@ func _update_facing(direction: Vector2) -> void:
 	animated_sprite.flip_h = facing > 0
 
 func _play_if_needed(animation_name: StringName) -> void:
-	if attacking or _dead:
+	if _dead:
+		return
+	# During an attack, only locomotion is allowed to override the firing pose.
+	# This is what lets the legs keep animating while LMB/RMB abilities are used.
+	if attacking and animation_name != &"move":
 		return
 	if animated_sprite.animation != animation_name or not animated_sprite.is_playing():
 		animated_sprite.play(animation_name)
@@ -599,6 +650,8 @@ func _die() -> void:
 	_dead = true
 	attacking = false
 	_attack_projectile_pending = false
+	_attack_fire_delay_left = 0.0
+	_attack_duration_left = 0.0
 	velocity = Vector2.ZERO
 	collision_layer = 0
 	collision_mask = 0
