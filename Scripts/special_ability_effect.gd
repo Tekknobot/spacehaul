@@ -114,7 +114,7 @@ func _run() -> void:
 	queue_free()
 
 func _sleep(seconds: float) -> void:
-	await get_tree().create_timer(maxf(seconds, 0.001)).timeout
+	await get_tree().create_timer(maxf(seconds, 0.001), false).timeout
 
 func _particle_profile() -> String:
 	match mecha_id:
@@ -923,11 +923,16 @@ func _ability_impact_fx(
 	var fx := ExplosionScript.new() as SpacehaulSpecialExplosion
 	root.add_child(fx)
 
+	# This helper is deliberately visual-only. Do not trigger the global explosion
+	# sample for contact sparks/corona/web decoration; real damaging _explode()
+	# calls remain audible.
 	fx.setup(
 		at.round(),
 		core,
 		glow,
-		radius * impact_scale
+		radius * impact_scale,
+		0.28,
+		false
 	)
 
 	_spawn_impact_particles(

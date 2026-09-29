@@ -18,7 +18,14 @@ var total_duration := 0.28
 var elapsed := 0.0
 var seed := 1
 
-func setup(world_position: Vector2, new_core: Color, new_glow: Color, new_radius: float = 18.0, new_duration: float = 0.28) -> void:
+func setup(
+	world_position: Vector2,
+	new_core: Color,
+	new_glow: Color,
+	new_radius: float = 18.0,
+	new_duration: float = 0.28,
+	play_sound: bool = true
+) -> void:
 	global_position = world_position.round()
 	core_color = new_core
 	glow_color = new_glow
@@ -38,8 +45,9 @@ func setup(world_position: Vector2, new_core: Color, new_glow: Color, new_radius
 	# Scale pitch slightly with blast size while routing every explosion through
 	# one shared voice. Multiple simultaneous explosion VFX therefore remain
 	# visually independent without increasing the explosion sample's volume.
-	var size_pitch := clampf(1.06 - (radius - 12.0) * 0.006, 0.82, 1.08)
-	SFX.play_explosion(self, -10.5, size_pitch)
+	if play_sound:
+		var size_pitch := clampf(1.06 - (radius - 12.0) * 0.006, 0.82, 1.08)
+		SFX.play_explosion(self, -10.5, size_pitch)
 	queue_redraw()
 
 func _get_explosion_frames() -> SpriteFrames:

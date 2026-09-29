@@ -296,8 +296,14 @@ func _begin_ranged_telegraph(direction: Vector2) -> void:
 	_attack_time = attack_cooldown
 	_update_facing(direction)
 	_spawn_ranged_telegraph(direction)
-	await get_tree().create_timer(0.22).timeout
+	await get_tree().create_timer(0.22, false).timeout
 	if _dead or not is_inside_tree():
+		return
+	if _target == null or not is_instance_valid(_target) or not _target.is_inside_tree():
+		_telegraphing = false
+		return
+	if not _target.is_in_group("player_mecha"):
+		_telegraphing = false
 		return
 	_telegraphing = false
 	_fire_projectile(direction)
@@ -327,8 +333,14 @@ func _begin_shock_telegraph() -> void:
 	_attack_time = attack_cooldown * 1.45
 	velocity = Vector2.ZERO
 	_spawn_shock_warning_ring()
-	await get_tree().create_timer(0.34).timeout
+	await get_tree().create_timer(0.34, false).timeout
 	if _dead or not is_inside_tree():
+		return
+	if _target == null or not is_instance_valid(_target) or not _target.is_inside_tree():
+		_telegraphing = false
+		return
+	if not _target.is_in_group("player_mecha"):
+		_telegraphing = false
 		return
 	_telegraphing = false
 	_fire_shock_pulse()
@@ -358,7 +370,9 @@ func _spawn_shock_warning_ring() -> void:
 	tw.tween_callback(ring.queue_free)
 
 func _fire_projectile(direction: Vector2) -> void:
-	if _target == null:
+	if _target == null or not is_instance_valid(_target) or not _target.is_inside_tree():
+		return
+	if not _target.is_in_group("player_mecha"):
 		return
 	var projectile := EnemyProjectileScript.new() as SpacehaulEnemyProjectile
 	get_tree().current_scene.add_child(projectile)
@@ -373,8 +387,12 @@ func _fire_projectile(direction: Vector2) -> void:
 		_fire_delayed_second_shot(delayed_direction)
 
 func _fire_delayed_second_shot(direction: Vector2) -> void:
-	await get_tree().create_timer(0.13).timeout
+	await get_tree().create_timer(0.13, false).timeout
 	if _dead or not is_inside_tree():
+		return
+	if _target == null or not is_instance_valid(_target) or not _target.is_inside_tree():
+		return
+	if not _target.is_in_group("player_mecha"):
 		return
 	var projectile := EnemyProjectileScript.new() as SpacehaulEnemyProjectile
 	get_tree().current_scene.add_child(projectile)
@@ -400,8 +418,9 @@ func _fire_shock_pulse() -> void:
 		var tw := line.create_tween()
 		tw.tween_property(line, "modulate:a", 0.0, 0.18)
 		tw.tween_callback(line.queue_free)
-	if _target != null and global_position.distance_to(_target.global_position) <= 58.0:
-		_target.take_projectile_hit((_target.global_position - global_position).normalized())
+	if _target != null and is_instance_valid(_target) and _target.is_inside_tree():
+		if _target.is_in_group("player_mecha") and global_position.distance_to(_target.global_position) <= 58.0:
+			_target.take_projectile_hit((_target.global_position - global_position).normalized())
 
 func take_projectile_hit(direction: Vector2) -> void:
 	if _dead:

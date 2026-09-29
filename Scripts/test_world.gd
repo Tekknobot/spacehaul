@@ -171,7 +171,7 @@ func _check_level_up() -> void:
 	_salvage -= _salvage_required
 	_level += 1
 	_salvage_required = 5 + _level * 4
-	SFX.play(self, "level", -8.0, 1.0)
+	SFX.play_ui(self, "level", -8.0, 1.0)
 	_present_upgrade_choices()
 
 func _update_secondary_unlock() -> void:
@@ -575,7 +575,7 @@ func _start_deck_transition(cheat_cycle: bool = false) -> void:
 	get_tree().paused = true
 	active.begin_deck_transition()
 	_show_banner("DECK TRANSFER", 0.62)
-	SFX.play(self, "boost", -12.5, 0.72)
+	SFX.play_ui(self, "boost", -12.5, 0.72)
 
 	var out_tween := create_tween()
 	out_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
@@ -602,7 +602,7 @@ func _start_deck_transition(cheat_cycle: bool = false) -> void:
 		active.set_deck_transition_scale(0.0)
 
 	_set_deck_transition_overlay_amount(0.92)
-	SFX.play(self, "boost", -14.0, 1.12)
+	SFX.play_ui(self, "boost", -14.0, 1.12)
 	_show_banner("DECK %d   %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)], 0.95)
 
 	var in_tween := create_tween()
