@@ -387,23 +387,61 @@ func _arc_shot_from(
 
 	return live_dest
 
-func _nearest_enemy_to_aim(aim_point: Vector2, lock_radius: float, max_owner_range: float) -> Node2D:
-	var best: Node2D
-	var best_distance_sq := lock_radius * lock_radius
+func _nearest_unused_enemy(
+	aim_point: Vector2,
+	search_radius: float,
+	max_owner_range: float,
+	excluded_ids: Dictionary
+) -> Node2D:
+	var best: Node2D = null
+	var best_distance_sq := search_radius * search_radius
+
 	for node in get_tree().get_nodes_in_group("enemies"):
 		var enemy := node as Node2D
-		if enemy == null or not is_instance_valid(enemy) or not enemy.is_inside_tree():
+
+		if enemy == null:
 			continue
+
+		if not is_instance_valid(enemy):
+			continue
+
+		if not enemy.is_inside_tree():
+			continue
+
+		var enemy_id := enemy.get_instance_id()
+
+		if excluded_ids.has(enemy_id):
+			continue
+
 		var collision_body := enemy as CollisionObject2D
+
 		if collision_body != null and collision_body.collision_layer == 0:
 			continue
+
 		if owner_center.distance_to(enemy.global_position) > max_owner_range:
 			continue
-		var distance_sq := aim_point.distance_squared_to(enemy.global_position)
+
+		var distance_sq := aim_point.distance_squared_to(
+			enemy.global_position
+		)
+
 		if distance_sq <= best_distance_sq:
 			best_distance_sq = distance_sq
 			best = enemy
+
 	return best
+
+func _nearest_enemy_to_aim(
+	aim_point: Vector2,
+	search_radius: float,
+	max_owner_range: float
+) -> Node2D:
+	return _nearest_unused_enemy(
+		aim_point,
+		search_radius,
+		max_owner_range,
+		{}
+	)
 
 func _show_target_lock(at: Vector2, core: Color, glow: Color) -> void:
 	# A tiny 1px reticle confirms that an arcing weapon acquired the enemy nearest
@@ -580,6 +618,7 @@ func _m3_comet_mortar() -> void:
 			Color(1.5, 0.35, 0.08, 1.0)
 		)
 
+	# Main mortar shell follows the enemy originally acquired near the cursor.
 	dest = await _arc_shot_from(
 		origin,
 		dest,
@@ -593,14 +632,33 @@ func _m3_comet_mortar() -> void:
 
 	var shards := 4 + tier * 2
 	var shard_radius := 32.0 + float(tier) * 5.0
+	var used_targets: Dictionary = {}
+
+	# Prefer other nearby enemies for the follow-up shrapnel.
+	if locked_target != null and is_instance_valid(locked_target):
+		used_targets[locked_target.get_instance_id()] = true
 
 	for i in range(shards):
-		var angle := TAU * float(i) / float(shards)
+		var end := Vector2.ZERO
 
-		var end := (
-			dest
-			+ Vector2(cos(angle), sin(angle)) * shard_radius
-		).round()
+		var shard_target := _nearest_unused_enemy_from_point(
+			dest,
+			shard_radius,
+			used_targets
+		)
+
+		if shard_target != null and is_instance_valid(shard_target):
+			var shard_target_id := shard_target.get_instance_id()
+			used_targets[shard_target_id] = true
+			end = shard_target.global_position.round()
+		else:
+			# Once unique nearby enemies are exhausted, keep the remaining
+			# shrapnel useful by falling back to a radial scatter.
+			var angle := TAU * float(i) / float(maxi(1, shards))
+			end = (
+				dest
+				+ Vector2(cos(angle), sin(angle)) * shard_radius
+			).round()
 
 		var shrapnel := _line(
 			dest,
@@ -623,7 +681,13 @@ func _m3_comet_mortar() -> void:
 			8.0
 		)
 
-		_fade_free(shrapnel, 0.12)
+		_fade_free(
+			shrapnel,
+			0.12
+		)
+
+		# Tiny cadence makes the shrapnel read as a cascading burst.
+		await _sleep(0.018)
 
 	if tier >= 3:
 		await _sleep(0.10)
@@ -635,7 +699,48 @@ func _m3_comet_mortar() -> void:
 			24.0,
 			24.0
 		)
-		
+
+
+func _nearest_unused_enemy_from_point(
+	search_center: Vector2,
+	search_radius: float,
+	excluded_ids: Dictionary
+) -> Node2D:
+	var best: Node2D = null
+	var best_distance_sq := search_radius * search_radius
+
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var enemy := node as Node2D
+
+		if enemy == null:
+			continue
+
+		if not is_instance_valid(enemy):
+			continue
+
+		if not enemy.is_inside_tree():
+			continue
+
+		var enemy_id := enemy.get_instance_id()
+
+		if excluded_ids.has(enemy_id):
+			continue
+
+		var collision_body := enemy as CollisionObject2D
+
+		if collision_body != null and collision_body.collision_layer == 0:
+			continue
+
+		var distance_sq := search_center.distance_squared_to(
+			enemy.global_position
+		)
+
+		if distance_sq <= best_distance_sq:
+			best_distance_sq = distance_sq
+			best = enemy
+
+	return best
+				
 # M3 SECONDARY: ORBITAL RAIN
 func _m3_orbital_rain() -> void:
 	var tier := secondary_tier
@@ -728,48 +833,75 @@ func _r3_swarm_rack() -> void:
 	var tier := primary_tier
 	var missile_count := 3 + tier
 	var max_range := 275.0 + float(tier) * 12.0
+	var secondary_lock_radius := 110.0 + float(tier) * 14.0
 
-	var locked_target := _nearest_enemy_to_aim(
+	var first_target := _nearest_enemy_to_aim(
 		target,
 		84.0,
 		max_range
 	)
 
-	var tracking_target_id := 0
-	var center_point := _target_clamped(max_range)
+	var primary_target_position := _target_clamped(max_range)
+	var used_targets: Dictionary = {}
 
-	if locked_target != null and is_instance_valid(locked_target):
-		tracking_target_id = locked_target.get_instance_id()
-		center_point = locked_target.global_position.round()
+	if first_target != null and is_instance_valid(first_target):
+		primary_target_position = first_target.global_position.round()
+		used_targets[first_target.get_instance_id()] = true
 
 		_show_target_lock(
-			center_point,
+			primary_target_position,
 			Color(1.6, 2.9, 3.35, 1.0),
 			Color(0.2, 0.85, 1.55, 1.0)
 		)
 
 	for i in range(missile_count):
-		var dest := center_point
+		var selected_enemy: Node2D = null
+		var tracking_target_id := 0
+		var dest := primary_target_position
 
-		# No target lock:
-		# retain the small ground-target spread.
-		if tracking_target_id == 0:
-			var angle := (
-				TAU
-				* float(i)
-				/ float(maxi(1, missile_count))
+		if i == 0:
+			# The first missile honors the enemy nearest the player's aim.
+			if first_target != null and is_instance_valid(first_target):
+				selected_enemy = first_target
+		else:
+			# Following missiles prefer different enemies near the first target.
+			selected_enemy = _nearest_unused_enemy(
+				primary_target_position,
+				secondary_lock_radius,
+				max_range,
+				used_targets
 			)
 
-			var offset_radius := (
-				0.0
-				if i == 0
-				else 5.0 + float(tier)
-			)
+			# If the local cluster is exhausted, widen the search while still
+			# preventing duplicate locks where another valid enemy exists.
+			if selected_enemy == null:
+				selected_enemy = _nearest_unused_enemy(
+					primary_target_position,
+					max_range,
+					max_range,
+					used_targets
+				)
 
-			dest += (
-				Vector2(cos(angle), sin(angle))
-				* offset_radius
-			)
+		if selected_enemy != null and is_instance_valid(selected_enemy):
+			tracking_target_id = selected_enemy.get_instance_id()
+			used_targets[tracking_target_id] = true
+			dest = selected_enemy.global_position.round()
+
+			if i > 0:
+				_show_target_lock(
+					dest,
+					Color(1.15, 2.5, 3.15, 0.82),
+					Color(0.15, 0.65, 1.35, 0.65)
+				)
+		else:
+			# No unused enemy is available. Spread remaining missiles around
+			# the primary impact point instead of stacking the same location.
+			var angle := TAU * float(i) / float(maxi(1, missile_count))
+			var offset_radius := 0.0 if i == 0 else 6.0 + float(tier) * 2.0 + float(i % 2) * 4.0
+			dest = (
+				primary_target_position
+				+ Vector2(cos(angle), sin(angle)) * offset_radius
+			).round()
 
 		await _arc_shot_from(
 			origin,
@@ -783,7 +915,7 @@ func _r3_swarm_rack() -> void:
 		)
 
 		await _sleep(0.018)
-		
+
 # R3 SECONDARY: MISSILE HALO
 func _r3_flak_dome() -> void:
 	var tier := secondary_tier

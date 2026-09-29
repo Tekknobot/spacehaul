@@ -35,10 +35,28 @@ const FLOOR_FEATURE_START_INDEX := 8
 
 const DECK_PALETTE_SHADER: Shader = preload("res://Shaders/deck_palette.gdshader")
 const HAZARD_GAS_SCRIPT: GDScript = preload("res://Scripts/hazard_gas.gd")
+# Walls are authored in deck pairs. The current five-deck run uses the first
+# ten textures in order: 1-2, 3-4, 5-6, 7-8, 9-10. Additional wall art is
+# preloaded and reserved for future decks or special-room variants.
 const WALL_TEXTURES: Array[Texture2D] = [
 	preload("res://Sprites/Tiles/WallTiles/wall_1.png"),
 	preload("res://Sprites/Tiles/WallTiles/wall_2.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_3.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_4.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_5.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_6.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_7.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_8.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_9.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_10.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_11.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_12.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_13.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_14.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_15.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_16.png"),
 ]
+const WALLS_PER_DECK := 2
 
 # Five environment grades sampled from the palette references supplied for the
 # authored SpaceMECHA floor, hazard, light and wall art. Deck 1 keeps the
@@ -54,7 +72,7 @@ var DECK_PALETTES := [
 		],
 	},
 	{
-		"name": "INDUSTRIAL",
+		"name": "MOTOR",
 		"colors": [
 			Color8(0, 1, 4), Color8(13, 16, 19), Color8(28, 34, 50),
 			Color8(85, 67, 17), Color8(114, 105, 66), Color8(226, 207, 128),
@@ -470,10 +488,15 @@ func _create_wall_block(cell: Vector2i) -> void:
 	block.z_index = clampi(int(round(center.y)), -3000, 3000)
 	_wall_visual_root.add_child(block)
 
-	# The supplied wall art is 64x64. Positioning the texture so its bottom
-	# lands on the bottom point of the 64x32 floor diamond preserves the same
-	# visual envelope as the original 30px procedural wall extrusion.
-	var texture := WALL_TEXTURES[1] if _rng.randf() < wall_vent_chance else WALL_TEXTURES[0]
+	# Each deck owns a dedicated pair of authored walls. The first texture in
+	# the pair is the common structural wall; the second is the detail variant.
+	# This keeps wall identity stable within a deck instead of drawing from the
+	# entire wall library at random.
+	var pair_start := _wall_pair_start_index()
+	var common_texture := WALL_TEXTURES[pair_start]
+	var detail_texture := WALL_TEXTURES[pair_start + 1]
+	var texture := detail_texture if _rng.randf() < wall_vent_chance else common_texture
+
 	var sprite := Sprite2D.new()
 	sprite.texture = texture
 	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -482,11 +505,22 @@ func _create_wall_block(cell: Vector2i) -> void:
 	sprite.centered = true
 	sprite.position = Vector2(0.0, tile_height * 0.5 - texture.get_height() * 0.5)
 
-	# Mirroring the common wall panel adds variation without resampling it.
-	if texture == WALL_TEXTURES[0] and _rng.randf() < 0.5:
+	# Mirroring only the common wall gives repetition some variation without
+	# flipping distinctive authored details such as doors, terminals, or pipes.
+	if texture == common_texture and _rng.randf() < 0.5:
 		sprite.flip_h = true
 
 	block.add_child(sprite)
+
+func _wall_pair_start_index() -> int:
+	if WALL_TEXTURES.size() < WALLS_PER_DECK:
+		return 0
+
+	# Deck palette index is zero based. With five current decks this resolves to
+	# 0, 2, 4, 6, 8 and therefore wall pairs 1-2 through 9-10.
+	var pair_count := maxi(1, int(WALL_TEXTURES.size() / WALLS_PER_DECK))
+	var deck_pair := _deck_palette_index % pair_count
+	return clampi(deck_pair * WALLS_PER_DECK, 0, WALL_TEXTURES.size() - WALLS_PER_DECK)
 
 func _rebuild_hazards() -> void:
 	_clear_children(hazard_root)
