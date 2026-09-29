@@ -9,9 +9,57 @@ const FLOOR_GRILL_TEXTURES: Array[Texture2D] = [
 ]
 const FLOOR_LIGHT_TEXTURE = preload("res://Sprites/Tiles/floor_light_01.png")
 const FLOOR_HAZARD_TEXTURE = preload("res://Sprites/Tiles/floor_hazardzone_01.png")
+const DECK_PALETTE_SHADER: Shader = preload("res://Shaders/deck_palette.gdshader")
 const WALL_TEXTURES: Array[Texture2D] = [
 	preload("res://Sprites/Tiles/wall_1.png"),
 	preload("res://Sprites/Tiles/wall_2.png"),
+]
+
+# Five environment grades sampled from the palette references supplied for the
+# authored SpaceMECHA floor, hazard, light and wall art. Deck 1 keeps the
+# familiar steel language; later decks rotate through the stronger palette
+# families so a deck change is immediately readable without changing tiles.
+var DECK_PALETTES := [
+	{
+		"name": "STEEL",
+		"colors": [
+			Color8(0, 0, 1), Color8(0, 1, 2), Color8(23, 31, 41),
+			Color8(33, 40, 47), Color8(54, 60, 64), Color8(94, 96, 97),
+			Color8(64, 72, 75),
+		],
+	},
+	{
+		"name": "INDUSTRIAL",
+		"colors": [
+			Color8(0, 1, 4), Color8(13, 16, 19), Color8(28, 34, 50),
+			Color8(85, 67, 17), Color8(114, 105, 66), Color8(226, 207, 128),
+			Color8(238, 203, 85),
+		],
+	},
+	{
+		"name": "CRYO",
+		"colors": [
+			Color8(0, 0, 2), Color8(0, 2, 4), Color8(2, 4, 6),
+			Color8(54, 60, 64), Color8(95, 174, 173), Color8(168, 199, 198),
+			Color8(121, 192, 191),
+		],
+	},
+	{
+		"name": "VOID",
+		"colors": [
+			Color8(2, 2, 3), Color8(17, 16, 25), Color8(23, 22, 33),
+			Color8(34, 30, 41), Color8(48, 50, 63), Color8(30, 47, 63),
+			Color8(92, 161, 167),
+		],
+	},
+	{
+		"name": "MONO",
+		"colors": [
+			Color8(0, 2, 4), Color8(11, 13, 19), Color8(19, 25, 36),
+			Color8(33, 40, 47), Color8(64, 72, 75), Color8(94, 96, 97),
+			Color8(87, 91, 93),
+		],
+	},
 ]
 
 enum FloorStyle {
@@ -53,6 +101,8 @@ var _floor_styles: Dictionary = {}
 var _start_cell := Vector2i.ONE
 var _wall_visual_root: Node2D
 var _path_grid := AStarGrid2D.new()
+var _deck_palette_index := 0
+var _deck_palette_material: ShaderMaterial
 
 @onready var collision_root: Node2D = $CollisionRoot
 @onready var hazard_root: Node2D = $HazardRoot
@@ -66,6 +116,8 @@ func _ready() -> void:
 		_wall_visual_root = Node2D.new()
 		_wall_visual_root.name = "WallVisualRoot"
 		add_child(_wall_visual_root)
+	_build_deck_palette_shader()
+	set_deck_palette(1)
 	generate_new_level()
 
 func generate_new_level(requested_seed: int = -1) -> void:
@@ -320,6 +372,8 @@ func _create_wall_block(cell: Vector2i) -> void:
 	var sprite := Sprite2D.new()
 	sprite.texture = texture
 	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	if _deck_palette_material != null:
+		sprite.material = _deck_palette_material
 	sprite.centered = true
 	sprite.position = Vector2(0.0, tile_height * 0.5 - texture.get_height() * 0.5)
 
@@ -350,6 +404,45 @@ func _rebuild_hazards() -> void:
 func _on_hazard_body_entered(body: Node) -> void:
 	if body.has_method("take_hurt"):
 		body.call_deferred("take_hurt")
+
+func set_deck_palette(deck_number: int) -> void:
+	if DECK_PALETTES.is_empty():
+		return
+	_deck_palette_index = (maxi(1, deck_number) - 1) % DECK_PALETTES.size()
+	if _deck_palette_material == null:
+		_build_deck_palette_shader()
+	var palette: Dictionary = DECK_PALETTES[_deck_palette_index]
+	var colors: Array = palette.get("colors", [])
+	if colors.size() < 7 or _deck_palette_material == null:
+		return
+	_deck_palette_material.set_shader_parameter("palette_0", colors[0])
+	_deck_palette_material.set_shader_parameter("palette_1", colors[1])
+	_deck_palette_material.set_shader_parameter("palette_2", colors[2])
+	_deck_palette_material.set_shader_parameter("palette_3", colors[3])
+	_deck_palette_material.set_shader_parameter("palette_4", colors[4])
+	_deck_palette_material.set_shader_parameter("palette_5", colors[5])
+	_deck_palette_material.set_shader_parameter("palette_accent", colors[6])
+	# Deck 1 preserves the original authored tile palette exactly. Later decks
+	# recolor strongly while the shader preserves per-pixel brightness/contrast.
+	var grade_strength := 0.0 if _deck_palette_index == 0 else 0.82
+	_deck_palette_material.set_shader_parameter("grade_strength", grade_strength)
+	_deck_palette_material.set_shader_parameter("accent_strength", 0.94)
+	material = _deck_palette_material
+	queue_redraw()
+
+func get_deck_palette_name(deck_number: int = -1) -> String:
+	if DECK_PALETTES.is_empty():
+		return "DECK"
+	var index := _deck_palette_index
+	if deck_number > 0:
+		index = (deck_number - 1) % DECK_PALETTES.size()
+	var palette: Dictionary = DECK_PALETTES[index]
+	return String(palette.get("name", "DECK"))
+
+func _build_deck_palette_shader() -> void:
+	_deck_palette_material = ShaderMaterial.new()
+	_deck_palette_material.shader = DECK_PALETTE_SHADER
+	material = _deck_palette_material
 
 func _draw() -> void:
 	draw_rect(deck_bounds.grow(900.0), Color("05070b"))

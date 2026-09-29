@@ -49,6 +49,9 @@ var _low_hull_warned := false
 var _run_summary_overlay: Control
 var _run_summary_title: Label
 var _run_summary_text: Label
+var _deck_transition_active := false
+var _deck_transition_overlay: ColorRect
+var _deck_transition_overlay_material: ShaderMaterial
 
 func _enter_tree() -> void:
 	add_to_group("survival_manager")
@@ -62,11 +65,14 @@ func _ready() -> void:
 
 	_hide_legacy_hud()
 	deck_banner.hide()
+	deck_banner.z_index = 1100
 	_build_compact_hud()
 	_build_damage_overlay()
+	_build_deck_transition_overlay()
 	_build_upgrade_overlay()
 	_build_run_summary_overlay()
 	_set_standard_hud_visible(true)
+	deck.set_deck_palette(_deck_number)
 
 	var active := mecha_manager.get_active_mecha()
 	if active != null:
@@ -90,10 +96,8 @@ func _process(delta: float) -> void:
 
 	if _run_time >= RUN_DURATION:
 		_complete_run()
-	elif _run_time >= _next_deck_time:
-		_deck_number += 1
-		_next_deck_time += DECK_DURATION
-		deck.generate_new_level()
+	elif _run_time >= _next_deck_time and not _deck_transition_active:
+		_start_deck_transition()
 
 	_update_hud()
 
@@ -213,10 +217,13 @@ func _restart_run() -> void:
 	_game_over = false
 	_run_complete = false
 	_secondary_announced = false
+	_deck_transition_active = false
+	_set_deck_transition_overlay_amount(0.0)
 	_level = 1
 	_salvage = 0
 	_salvage_required = 6
 	_salvage_magnet_radius = 86.0
+	deck.set_deck_palette(_deck_number)
 	deck.generate_new_level()
 	mecha_manager.start_new_run(true)
 	enemy_manager.reset_run()
@@ -227,9 +234,113 @@ func _on_deck_regenerated(_new_spawn: Vector2, new_seed: int) -> void:
 	var active := mecha_manager.get_active_mecha()
 	if active != null and _run_time > 1.0:
 		active.repair_hull(10)
-	if _run_time > 1.0:
+	if _run_time > 1.0 and not _deck_transition_active:
 		_show_banner("DECK %d" % _deck_number)
 	_update_hud()
+
+func _start_deck_transition() -> void:
+	if _deck_transition_active or _game_over or _run_complete:
+		return
+	var active := mecha_manager.get_active_mecha()
+	if active == null:
+		_deck_number += 1
+		_next_deck_time += DECK_DURATION
+		deck.set_deck_palette(_deck_number)
+		deck.generate_new_level()
+		return
+
+	_deck_transition_active = true
+	enemy_manager.set_spawning_enabled(false)
+	get_tree().paused = true
+	active.begin_deck_transition()
+	_show_banner("DECK TRANSFER", 0.62)
+	SFX.play(self, "boost", -12.5, 0.72)
+
+	var out_tween := create_tween()
+	out_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	out_tween.set_parallel(true)
+	out_tween.tween_method(Callable(active, "set_deck_transition_amount"), 0.0, 1.0, 0.64).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	out_tween.tween_method(Callable(active, "set_transition_camera_zoom"), 1.0, 1.22, 0.64).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	out_tween.tween_method(Callable(self, "_set_deck_transition_overlay_amount"), 0.0, 0.72, 0.64).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	if _top_hud != null:
+		out_tween.tween_property(_top_hud, "modulate:a", 0.18, 0.34)
+	await out_tween.finished
+
+	_deck_number += 1
+	_next_deck_time += DECK_DURATION
+	deck.set_deck_palette(_deck_number)
+	deck.generate_new_level()
+
+	active = mecha_manager.get_active_mecha()
+	if active != null:
+		active.prepare_deck_materialize()
+		active.set_transition_camera_zoom(1.22)
+		active.set_deck_transition_scale(0.0)
+
+	_set_deck_transition_overlay_amount(0.92)
+	SFX.play(self, "boost", -14.0, 1.12)
+	_show_banner("DECK %d   //   %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)], 0.95)
+
+	var in_tween := create_tween()
+	in_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	in_tween.set_parallel(true)
+	if active != null:
+		in_tween.tween_method(Callable(active, "set_deck_transition_amount"), 1.0, 0.0, 0.76).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		in_tween.tween_method(Callable(active, "set_transition_camera_zoom"), 1.22, 1.0, 0.92).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		in_tween.tween_method(Callable(active, "set_deck_transition_scale"), 0.0, 1.0, 0.76).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	in_tween.tween_method(Callable(self, "_set_deck_transition_overlay_amount"), 0.92, 0.0, 0.84).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	if _top_hud != null:
+		in_tween.tween_property(_top_hud, "modulate:a", 1.0, 0.52)
+	await in_tween.finished
+
+	if active != null:
+		active.end_deck_transition()
+	_set_deck_transition_overlay_amount(0.0)
+	get_tree().paused = false
+	enemy_manager.set_spawning_enabled(true)
+	_deck_transition_active = false
+	_update_hud()
+
+func _build_deck_transition_overlay() -> void:
+	_deck_transition_overlay = ColorRect.new()
+	_deck_transition_overlay.name = "DeckTransitionOverlay"
+	_deck_transition_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_deck_transition_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_deck_transition_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	_deck_transition_overlay.z_index = 850
+	_deck_transition_overlay.color = Color.WHITE
+	hud.add_child(_deck_transition_overlay)
+
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+uniform float amount : hint_range(0.0, 1.0) = 0.0;
+
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(17.13, 91.77))) * 43758.5453);
+}
+
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float edge = smoothstep(0.18, 1.05, max(abs(p.x), abs(p.y)));
+	float scan = step(0.72, fract(FRAGCOORD.y * 0.125 + TIME * 5.0));
+	float pixel_noise = hash(floor(FRAGCOORD.xy / 4.0));
+	float breakup = step(0.86, pixel_noise) * amount * 0.11;
+	vec3 cyan = vec3(0.20, 0.78, 0.88);
+	vec3 deep = vec3(0.005, 0.012, 0.020);
+	float glow = edge * amount * 0.30 + scan * edge * amount * 0.08;
+	float alpha = amount * 0.78 + breakup;
+	COLOR = vec4(mix(deep, cyan, glow), clamp(alpha, 0.0, 0.92));
+}
+"""
+	_deck_transition_overlay_material = ShaderMaterial.new()
+	_deck_transition_overlay_material.shader = shader
+	_deck_transition_overlay_material.set_shader_parameter("amount", 0.0)
+	_deck_transition_overlay.material = _deck_transition_overlay_material
+
+func _set_deck_transition_overlay_amount(value: float) -> void:
+	if _deck_transition_overlay_material != null:
+		_deck_transition_overlay_material.set_shader_parameter("amount", clampf(value, 0.0, 1.0))
 
 func _update_hud() -> void:
 	if _hud_mecha == null:

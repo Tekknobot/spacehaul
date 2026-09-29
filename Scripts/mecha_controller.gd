@@ -89,6 +89,8 @@ var _hurt_time := 0.0
 var _dead := false
 var _dissolve_material: ShaderMaterial
 var _combat_material: ShaderMaterial
+var _deck_transition_material: ShaderMaterial
+var _deck_transition_locked := false
 var _boost_time := 0.0
 var _boost_cooldown_left := 0.0
 var _boost_direction := Vector2.RIGHT
@@ -104,6 +106,7 @@ func _ready() -> void:
 	hull = max_hull
 	_build_sprite_frames()
 	_build_combat_shader()
+	_build_deck_transition_shader()
 	animated_sprite.animation_finished.connect(_on_animation_finished)
 	animated_sprite.frame_changed.connect(_on_frame_changed)
 	animated_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -114,6 +117,9 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	_update_depth_order()
 	if _dead:
+		return
+	if _deck_transition_locked:
+		velocity = Vector2.ZERO
 		return
 
 	_primary_cooldown_left = maxf(0.0, _primary_cooldown_left - delta)
@@ -169,6 +175,62 @@ func teleport_to(value: Vector2) -> void:
 	_secondary_cooldown_left = minf(_secondary_cooldown_left, 0.5)
 	if not _dead:
 		_play_if_needed("idle")
+
+func begin_deck_transition() -> void:
+	if _dead:
+		return
+	_deck_transition_locked = true
+	velocity = Vector2.ZERO
+	attacking = false
+	_attack_projectile_pending = false
+	_boost_time = 0.0
+	if marker != null:
+		marker.visible = false
+	if _deck_transition_material != null:
+		_deck_transition_material.set_shader_parameter("dissolve_amount", 0.0)
+		_deck_transition_material.set_shader_parameter("phase_strength", 1.0)
+		animated_sprite.material = _deck_transition_material
+	animated_sprite.modulate.a = 1.0
+	animated_sprite.scale = Vector2.ONE
+
+func prepare_deck_materialize() -> void:
+	if _dead:
+		return
+	_deck_transition_locked = true
+	velocity = Vector2.ZERO
+	if marker != null:
+		marker.visible = false
+	if _deck_transition_material != null:
+		_deck_transition_material.set_shader_parameter("dissolve_amount", 1.0)
+		_deck_transition_material.set_shader_parameter("phase_strength", 1.0)
+		animated_sprite.material = _deck_transition_material
+	animated_sprite.modulate.a = 1.0
+	animated_sprite.scale = Vector2(0.92, 1.08)
+
+func set_deck_transition_amount(value: float) -> void:
+	if _deck_transition_material != null:
+		_deck_transition_material.set_shader_parameter("dissolve_amount", clampf(value, 0.0, 1.0))
+
+func set_deck_transition_scale(value: float) -> void:
+	animated_sprite.scale = Vector2(lerpf(0.92, 1.0, value), lerpf(1.08, 1.0, value))
+
+func set_transition_camera_zoom(value: float) -> void:
+	if camera != null:
+		camera.zoom = Vector2.ONE * maxf(0.2, value)
+
+func end_deck_transition() -> void:
+	if _dead:
+		return
+	_deck_transition_locked = false
+	animated_sprite.modulate.a = 1.0
+	animated_sprite.scale = Vector2.ONE
+	if _combat_material != null:
+		animated_sprite.material = _combat_material
+	if marker != null:
+		marker.visible = is_player_controlled
+	if camera != null:
+		camera.zoom = Vector2.ONE
+	_play_if_needed("idle")
 
 func get_animation_name() -> String:
 	if animated_sprite == null:
@@ -569,6 +631,48 @@ func _set_dissolve_amount(value: float) -> void:
 	if _dissolve_material != null:
 		_dissolve_material.set_shader_parameter("dissolve_amount", value)
 
+
+func _build_deck_transition_shader() -> void:
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+render_mode unshaded;
+
+uniform float dissolve_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float phase_strength : hint_range(0.0, 1.0) = 1.0;
+uniform vec4 edge_color : source_color = vec4(0.35, 1.35, 1.65, 1.0);
+
+float pixel_hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+void fragment() {
+	vec4 tex = texture(TEXTURE, UV);
+	if (tex.a < 0.01) {
+		discard;
+	}
+
+	vec2 tex_size = vec2(textureSize(TEXTURE, 0));
+	vec2 pixel = floor(UV * tex_size);
+	float noise = pixel_hash(pixel);
+	// Mostly vertical materialization with enough random breakup to look like
+	// individual pixels being transmitted rather than a simple wipe.
+	float ordered = mix(noise, 1.0 - UV.y, 0.62);
+	if (ordered < dissolve_amount) {
+		discard;
+	}
+
+	float edge = 1.0 - smoothstep(0.018, 0.105, abs(ordered - dissolve_amount));
+	float scan = step(0.82, fract((pixel.x * 0.37 + pixel.y * 0.19) + TIME * 8.0));
+	tex.rgb += edge_color.rgb * edge * (1.15 + phase_strength * 0.75);
+	tex.rgb += edge_color.rgb * scan * phase_strength * edge * 0.32;
+	COLOR = tex * COLOR;
+}
+"""
+	_deck_transition_material = ShaderMaterial.new()
+	_deck_transition_material.shader = shader
+	_deck_transition_material.set_shader_parameter("dissolve_amount", 0.0)
+	_deck_transition_material.set_shader_parameter("phase_strength", 1.0)
 
 func _build_combat_shader() -> void:
 	var shader := Shader.new()
