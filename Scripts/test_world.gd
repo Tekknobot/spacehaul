@@ -57,7 +57,6 @@ func _enter_tree() -> void:
 	add_to_group("survival_manager")
 
 func _ready() -> void:
-	process_mode = Node.PROCESS_MODE_ALWAYS
 	InputSetupScript.ensure_actions()
 	_rng.randomize()
 	deck.regenerated.connect(_on_deck_regenerated)
