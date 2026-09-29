@@ -1,18 +1,37 @@
 extends Node2D
 class_name ProceduralDeck
 
-const FLOOR_BASE_TEXTURE = preload("res://Sprites/Tiles/floor_base_01.png")
-const FLOOR_GRILL_TEXTURES: Array[Texture2D] = [
-	preload("res://Sprites/Tiles/floor_grill_01.png"),
-	preload("res://Sprites/Tiles/floor_grill_02.png"),
-	preload("res://Sprites/Tiles/floor_grill_03.png"),
+# The active environment art lives in the dedicated FloorTiles and WallTiles
+# folders. The legacy floor_base / floor_grill / floor_light / hazard textures
+# one directory above are intentionally no longer used by the procedural deck.
+const FLOOR_TEXTURES: Array[Texture2D] = [
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_01.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_02.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_03.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_04.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_05.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_06.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_07.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_08.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_09.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_10.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_11.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_12.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_13.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_14.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_15.png"),
+	preload("res://Sprites/Tiles/FloorTiles/floor_base_16.png"),
 ]
-const FLOOR_LIGHT_TEXTURE = preload("res://Sprites/Tiles/floor_light_01.png")
-const FLOOR_HAZARD_TEXTURE = preload("res://Sprites/Tiles/floor_hazardzone_01.png")
+
+# A restrained set of clean plates forms most walking surfaces; the remaining
+# technical/grille/panel tiles are mixed in as detail. All sixteen are used.
+const FLOOR_COMMON_INDICES: Array[int] = [0, 4, 5, 8, 9, 10]
+const FLOOR_DETAIL_INDICES: Array[int] = [1, 2, 3, 6, 7, 11, 12, 13, 14, 15]
+
 const DECK_PALETTE_SHADER: Shader = preload("res://Shaders/deck_palette.gdshader")
 const WALL_TEXTURES: Array[Texture2D] = [
-	preload("res://Sprites/Tiles/wall_1.png"),
-	preload("res://Sprites/Tiles/wall_2.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_1.png"),
+	preload("res://Sprites/Tiles/WallTiles/wall_2.png"),
 ]
 
 # Five environment grades sampled from the palette references supplied for the
@@ -61,15 +80,6 @@ var DECK_PALETTES := [
 		],
 	},
 ]
-
-enum FloorStyle {
-	BASE,
-	GRILL_1,
-	GRILL_2,
-	GRILL_3,
-	LIGHT,
-	HAZARD,
-}
 
 signal regenerated(new_spawn: Vector2, new_seed: int)
 
@@ -316,35 +326,40 @@ func _select_decorations() -> void:
 	_floor_styles.clear()
 
 	var floor_cells: Array[Vector2i] = []
+	var detail_chance := clampf(floor_grill_chance + floor_light_chance, 0.0, 0.65)
+
 	for x in range(1, grid_width - 1):
 		for y in range(1, grid_height - 1):
 			if not _walkable[x][y]:
 				continue
 
 			var cell := Vector2i(x, y)
-			var style := FloorStyle.BASE
+			var tile_index := _choose_floor_tile_index(cell, detail_chance)
+			_floor_styles[cell] = tile_index
 
-			# Keep the spawn room visually calm while the rest of the deck gains
-			# occasional vents, grilles and embedded light strips.
-			if cell != _start_cell:
-				var detail_roll := _rng.randf()
-				if detail_roll < floor_light_chance:
-					style = FloorStyle.LIGHT
-				elif detail_roll < floor_light_chance + floor_grill_chance:
-					style = FloorStyle.GRILL_1 + _rng.randi_range(0, 2)
-
-			_floor_styles[cell] = style
-			if style != FloorStyle.BASE:
+			if tile_index in FLOOR_DETAIL_INDICES:
 				_accent_cells.append(cell)
 
 			if Vector2(cell).distance_to(Vector2(_start_cell)) >= 7.0:
 				floor_cells.append(cell)
 
+	# Hazards are gameplay metadata now, not a special floor texture. This keeps
+	# the new FloorTiles art intact and lets any floor design become dangerous.
 	_shuffle_cells(floor_cells)
 	for i in range(mini(hazard_count, floor_cells.size())):
-		var hazard_cell := floor_cells[i]
-		_hazard_cells.append(hazard_cell)
-		_floor_styles[hazard_cell] = FloorStyle.HAZARD
+		_hazard_cells.append(floor_cells[i])
+
+func _choose_floor_tile_index(cell: Vector2i, detail_chance: float) -> int:
+	# Keep the exact spawn tile calm and readable underneath the mecha.
+	if cell == _start_cell:
+		return FLOOR_COMMON_INDICES[0]
+
+	# Use stable procedural selection from the level RNG. Common structural plates
+	# dominate, while technical panels and grilles provide enough variation that
+	# the new sixteen-tile set is visibly represented across a deck.
+	if _rng.randf() < detail_chance:
+		return FLOOR_DETAIL_INDICES[_rng.randi_range(0, FLOOR_DETAIL_INDICES.size() - 1)]
+	return FLOOR_COMMON_INDICES[_rng.randi_range(0, FLOOR_COMMON_INDICES.size() - 1)]
 
 func _rebuild_floor_visuals() -> void:
 	if _floor_visual_root == null:
@@ -361,10 +376,8 @@ func _rebuild_floor_visuals() -> void:
 			if y < 0 or y >= grid_height or not _walkable[x][y]:
 				continue
 			var cell := Vector2i(x, y)
-			var style := int(_floor_styles.get(cell, FloorStyle.BASE))
-			var texture := _floor_texture_for_style(style)
-			if texture == null:
-				texture = FLOOR_BASE_TEXTURE
+			var tile_index := clampi(int(_floor_styles.get(cell, 0)), 0, FLOOR_TEXTURES.size() - 1)
+			var texture := FLOOR_TEXTURES[tile_index]
 			var sprite := Sprite2D.new()
 			sprite.name = "Floor_%d_%d" % [x, y]
 			sprite.texture = texture
@@ -466,14 +479,37 @@ func _rebuild_overlay_visuals() -> void:
 			accent = colors[6]
 
 	for cell in _hazard_cells:
+		var hazard_center := _cell_center(cell)
+
+		# Hazards no longer replace the floor art. A translucent warning diamond and
+		# two interior bars sit above whichever FloorTiles texture was chosen.
+		var fill := Polygon2D.new()
+		fill.name = "HazardFill_%d_%d" % [cell.x, cell.y]
+		fill.position = hazard_center
+		fill.polygon = _diamond_points(Vector2.ZERO, tile_width - 5.0, tile_height - 3.0)
+		fill.color = Color(accent.r, accent.g, accent.b, 0.10)
+		_overlay_visual_root.add_child(fill)
+
 		var outline := Line2D.new()
 		outline.name = "HazardOutline_%d_%d" % [cell.x, cell.y]
-		outline.position = _cell_center(cell)
+		outline.position = hazard_center
 		outline.points = _closed_polygon(_diamond_points(Vector2.ZERO, tile_width - 2.0, tile_height - 1.0))
 		outline.width = 1.0
-		outline.default_color = accent.lightened(0.12)
+		outline.default_color = accent.lightened(0.20)
 		outline.antialiased = false
 		_overlay_visual_root.add_child(outline)
+
+		for segment in [
+			PackedVector2Array([Vector2(-10.0, -4.0), Vector2(10.0, 4.0)]),
+			PackedVector2Array([Vector2(-10.0, 4.0), Vector2(10.0, -4.0)]),
+		]:
+			var warning_bar := Line2D.new()
+			warning_bar.position = hazard_center
+			warning_bar.points = segment
+			warning_bar.width = 1.0
+			warning_bar.default_color = Color(accent.r, accent.g, accent.b, 0.72)
+			warning_bar.antialiased = false
+			_overlay_visual_root.add_child(warning_bar)
 
 	var center := _cell_center(_start_cell)
 	var outer_points := _diamond_points(Vector2.ZERO, 34.0, 18.0)
@@ -628,20 +664,6 @@ func _draw() -> void:
 	# Sprite2D children so the palette shader is guaranteed to receive TEXTURE.
 	draw_rect(deck_bounds.grow(900.0), Color("05070b"))
 
-func _floor_texture_for_style(style: int) -> Texture2D:
-	match style:
-		FloorStyle.GRILL_1:
-			return FLOOR_GRILL_TEXTURES[0]
-		FloorStyle.GRILL_2:
-			return FLOOR_GRILL_TEXTURES[1]
-		FloorStyle.GRILL_3:
-			return FLOOR_GRILL_TEXTURES[2]
-		FloorStyle.LIGHT:
-			return FLOOR_LIGHT_TEXTURE
-		FloorStyle.HAZARD:
-			return FLOOR_HAZARD_TEXTURE
-		_:
-			return FLOOR_BASE_TEXTURE
 
 func _wall_touches_floor(cell: Vector2i) -> bool:
 	for direction in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
