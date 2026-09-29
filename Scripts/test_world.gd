@@ -60,6 +60,17 @@ var _deck_transition_active := false
 var _deck_transition_overlay: ColorRect
 var _deck_transition_overlay_material: ShaderMaterial
 
+var _mecha_select_overlay: Control
+var _mecha_select_preview: TextureRect
+var _mecha_select_name: Label
+var _mecha_select_primary: Label
+var _mecha_select_secondary: Label
+var _mecha_select_status: Label
+var _mecha_select_deploy: Button
+var _mecha_select_buttons: Array[Button] = []
+var _selected_mecha_id := "M1"
+var _menu_open := false
+
 func _enter_tree() -> void:
 	add_to_group("survival_manager")
 
@@ -77,23 +88,23 @@ func _ready() -> void:
 	_build_deck_transition_overlay()
 	_build_upgrade_overlay()
 	_build_run_summary_overlay()
-	_set_standard_hud_visible(true)
+	_build_mecha_select_overlay()
+	_set_standard_hud_visible(false)
 	deck.set_deck_palette(_deck_number)
-
-	var active := mecha_manager.get_active_mecha()
-	if active != null:
-		_on_active_mecha_changed(active)
-	enemy_manager.reset_run()
+	enemy_manager.set_spawning_enabled(false)
 	_update_hud()
 
 	if video_capture_mode:
+		_selected_mecha_id = mecha_manager.fixed_starting_mecha
+		_start_selected_run()
 		call_deferred("_apply_video_capture_state")
+	else:
+		_show_mecha_select("SELECT A CHASSIS")
 
 func _process(delta: float) -> void:
 	_update_damage_overlay(delta)
 
-	if (_game_over or _run_complete) and Input.is_action_just_pressed("regenerate_level"):
-		_restart_run()
+	if _menu_open:
 		return
 
 	# Developer palette/deck test. P performs the real cinematic transfer but
@@ -205,24 +216,230 @@ func _on_player_destroyed(_mecha: MechaController) -> void:
 	enemy_manager.set_spawning_enabled(false)
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
-	get_tree().paused = false
-	_show_banner("MECHA LOST", 1.2)
-	_show_run_summary(false)
-	_update_hud()
+	var result := "LAST RUN   %s   KILLS %03d   LV %02d" % [_format_time(_run_time), enemy_manager.get_total_kills(), _level]
+	_record_and_get_best_time(_run_time)
+	_show_mecha_select("MECHA LOST   //   " + result)
 
 func _complete_run() -> void:
 	if _run_complete:
 		return
 	_run_complete = true
 	enemy_manager.set_spawning_enabled(false)
-	_show_banner("EXTRACTION COMPLETE", 1.5)
-	_show_run_summary(true)
-	_update_hud()
+	var result := "LAST RUN   %s   KILLS %03d   LV %02d" % [_format_time(_run_time), enemy_manager.get_total_kills(), _level]
+	_record_and_get_best_time(_run_time)
+	_show_mecha_select("EXTRACTION COMPLETE   //   " + result)
 
 func _restart_run() -> void:
-	get_tree().paused = false
+	_start_selected_run()
+
+func _build_mecha_select_overlay() -> void:
+	_mecha_select_overlay = ColorRect.new()
+	_mecha_select_overlay.name = "MechaSelect"
+	_mecha_select_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_mecha_select_overlay.color = Color(0.006, 0.011, 0.018, 0.97)
+	_mecha_select_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_mecha_select_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	_mecha_select_overlay.z_index = 2000
+	hud.add_child(_mecha_select_overlay)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_mecha_select_overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(608.0, 334.0)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.014, 0.022, 0.032, 0.98)
+	panel_style.border_width_left = 1
+	panel_style.border_width_top = 1
+	panel_style.border_width_right = 1
+	panel_style.border_width_bottom = 1
+	panel_style.border_color = Color(0.20, 0.62, 0.70, 0.90)
+	panel_style.corner_radius_top_left = 4
+	panel_style.corner_radius_top_right = 4
+	panel_style.corner_radius_bottom_left = 4
+	panel_style.corner_radius_bottom_right = 4
+	panel.add_theme_stylebox_override("panel", panel_style)
+	center.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	panel.add_child(margin)
+
+	var root_box := VBoxContainer.new()
+	root_box.add_theme_constant_override("separation", 5)
+	margin.add_child(root_box)
+
+	var title := Label.new()
+	title.text = "SPACEMECHA"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_override("font", load("res://Fonts/mago3.ttf") as Font)
+	title.add_theme_font_size_override("font_size", 42)
+	title.add_theme_color_override("font_color", Color(0.70, 0.95, 1.0, 1.0))
+	root_box.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "SURVIVAL EXTRACTION   //   SELECT MECHA"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	subtitle.add_theme_font_size_override("font_size", 14)
+	subtitle.add_theme_color_override("font_color", Color(0.46, 0.65, 0.72, 1.0))
+	root_box.add_child(subtitle)
+
+	var body := HBoxContainer.new()
+	body.add_theme_constant_override("separation", 12)
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root_box.add_child(body)
+
+	var preview_panel := PanelContainer.new()
+	preview_panel.custom_minimum_size = Vector2(176.0, 198.0)
+	var preview_style := StyleBoxFlat.new()
+	preview_style.bg_color = Color(0.010, 0.017, 0.026, 0.94)
+	preview_style.border_width_left = 1
+	preview_style.border_width_top = 1
+	preview_style.border_width_right = 1
+	preview_style.border_width_bottom = 1
+	preview_style.border_color = Color(0.12, 0.30, 0.35, 0.9)
+	preview_panel.add_theme_stylebox_override("panel", preview_style)
+	body.add_child(preview_panel)
+
+	var preview_box := VBoxContainer.new()
+	preview_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	preview_box.add_theme_constant_override("separation", 2)
+	preview_panel.add_child(preview_box)
+
+	_mecha_select_preview = TextureRect.new()
+	_mecha_select_preview.custom_minimum_size = Vector2(150.0, 130.0)
+	_mecha_select_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_mecha_select_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_mecha_select_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	preview_box.add_child(_mecha_select_preview)
+
+	_mecha_select_name = Label.new()
+	_mecha_select_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mecha_select_name.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
+	_mecha_select_name.add_theme_font_size_override("font_size", 28)
+	_mecha_select_name.add_theme_color_override("font_color", Color(0.62, 0.94, 1.0, 1.0))
+	preview_box.add_child(_mecha_select_name)
+
+	_mecha_select_primary = _make_select_detail_label()
+	preview_box.add_child(_mecha_select_primary)
+	_mecha_select_secondary = _make_select_detail_label()
+	preview_box.add_child(_mecha_select_secondary)
+
+	var right_box := VBoxContainer.new()
+	right_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right_box.add_theme_constant_override("separation", 6)
+	body.add_child(right_box)
+
+	var grid := GridContainer.new()
+	grid.columns = 5
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	right_box.add_child(grid)
+
+	for mecha_id in MechaManager.MECHA_IDS:
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(72.0, 50.0)
+		button.text = String(MechaController.MECHA_DISPLAY_NAMES.get(mecha_id, mecha_id))
+		button.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+		button.add_theme_font_size_override("font_size", 15)
+		button.focus_mode = Control.FOCUS_ALL
+		
+		# Remove Godot's default white focus rectangle.
+		var empty_focus := StyleBoxEmpty.new()
+		button.add_theme_stylebox_override("focus", empty_focus)
+				
+		button.pressed.connect(_deploy_mecha.bind(String(mecha_id)))
+		button.focus_entered.connect(_select_mecha.bind(String(mecha_id)))
+		button.mouse_entered.connect(_select_mecha.bind(String(mecha_id)))
+		grid.add_child(button)
+		_mecha_select_buttons.append(button)
+
+	#_mecha_select_deploy = Button.new()
+	#_mecha_select_deploy.custom_minimum_size = Vector2(0.0, 52.0)
+	#_mecha_select_deploy.text = "DEPLOY"
+	#_mecha_select_deploy.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
+	#_mecha_select_deploy.add_theme_font_size_override("font_size", 25)
+	#_mecha_select_deploy.add_theme_color_override("font_color", Color(0.68, 0.96, 1.0, 1.0))
+	#_mecha_select_deploy.pressed.connect(_start_selected_run)
+	#right_box.add_child(_mecha_select_deploy)
+
+	var controls := Label.new()
+	controls.text = "ARROWS / MOUSE   SELECT     ENTER / A   CONFIRM"
+	controls.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	controls.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	controls.add_theme_font_size_override("font_size", 14)
+	controls.add_theme_color_override("font_color", Color(0.43, 0.59, 0.65, 1.0))
+	right_box.add_child(controls)
+
+	_mecha_select_status = Label.new()
+	_mecha_select_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mecha_select_status.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_mecha_select_status.add_theme_font_size_override("font_size", 14)
+	_mecha_select_status.add_theme_color_override("font_color", Color(0.72, 0.82, 0.86, 1.0))
+	root_box.add_child(_mecha_select_status)
+
+	_select_mecha(_selected_mecha_id)
+	_mecha_select_overlay.hide()
+
+func _make_select_detail_label() -> Label:
+	var label := Label.new()
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	label.add_theme_font_size_override("font_size", 13)
+	label.add_theme_color_override("font_color", Color(0.58, 0.72, 0.78, 1.0))
+	return label
+
+func _select_mecha(mecha_id: String) -> void:
+	if mecha_id not in MechaManager.MECHA_IDS:
+		return
+	_selected_mecha_id = mecha_id
+	var display_name := String(MechaController.MECHA_DISPLAY_NAMES.get(mecha_id, mecha_id))
+	var abilities: Dictionary = MechaController.ABILITY_NAMES.get(mecha_id, {})
+	_mecha_select_name.text = display_name
+	_mecha_select_primary.text = "LMB   " + String(abilities.get("primary", "PRIMARY"))
+	_mecha_select_secondary.text = "RMB   " + String(abilities.get("secondary", "SECONDARY"))
+	var preview_path := "res://Sprites/Mechas/%s/%sidle_1.png" % [mecha_id, mecha_id.to_lower()]
+	_mecha_select_preview.texture = load(preview_path) as Texture2D
+	for i in range(_mecha_select_buttons.size()):
+		var button := _mecha_select_buttons[i]
+		var id = MechaManager.MECHA_IDS[i]
+		button.text = ("> " if id == mecha_id else "") + String(MechaController.MECHA_DISPLAY_NAMES.get(id, id))
+	if _mecha_select_deploy != null:
+		_mecha_select_deploy.text = "DEPLOY   " + display_name
+
+func _deploy_mecha(mecha_id: String) -> void:
+	_select_mecha(mecha_id)
+	_start_selected_run()
+
+func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
+	_menu_open = true
+	get_tree().paused = true
+	enemy_manager.set_spawning_enabled(false)
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
+	if _run_summary_overlay != null:
+		_run_summary_overlay.hide()
+	if deck_banner != null:
+		deck_banner.hide()
+	_set_standard_hud_visible(false)
+	if _mecha_select_status != null:
+		_mecha_select_status.text = status_text
+	if _mecha_select_overlay != null:
+		_mecha_select_overlay.show()
+		_select_mecha(_selected_mecha_id)
+		if not _mecha_select_buttons.is_empty():
+			_mecha_select_buttons[MechaManager.MECHA_IDS.find(_selected_mecha_id)].grab_focus()
+
+func _start_selected_run() -> void:
+	_menu_open = false
+	get_tree().paused = false
+	if _mecha_select_overlay != null:
+		_mecha_select_overlay.hide()
 	if _run_summary_overlay != null:
 		_run_summary_overlay.hide()
 	_damage_intensity = 0.0
@@ -244,12 +461,10 @@ func _restart_run() -> void:
 	_salvage_magnet_radius = 86.0
 	deck.set_deck_palette(_deck_number)
 	deck.generate_new_level()
-	mecha_manager.start_new_run(true)
+	mecha_manager.start_new_run_with_mecha(_selected_mecha_id)
 	enemy_manager.reset_run()
+	_set_standard_hud_visible(true)
 	_update_hud()
-
-	if video_capture_mode:
-		call_deferred("_apply_video_capture_state")
 
 func _apply_video_capture_state() -> void:
 	# Stage a believable late-run state for recording. The clock, deck, enemy
@@ -612,11 +827,10 @@ func _make_stat_cell(row: HBoxContainer, color: Color) -> Label:
 	panel.add_child(label)
 	return label
 
-func _set_standard_hud_visible(_value: bool) -> void:
-	# HULL, salvage/level and run state are core combat information and stay visible.
-	_hud_visible = true
+func _set_standard_hud_visible(value: bool) -> void:
+	_hud_visible = value
 	if _top_hud != null:
-		_top_hud.visible = true
+		_top_hud.visible = value
 
 func _build_damage_overlay() -> void:
 	_damage_overlay = ColorRect.new()
@@ -816,6 +1030,7 @@ func _build_upgrade_overlay() -> void:
 		button.add_theme_font_override("font", font_small)
 		button.add_theme_font_size_override("font_size", 16)
 		button.focus_mode = Control.FOCUS_ALL
+		
 		button.pressed.connect(_choose_upgrade.bind(index))
 		box.add_child(button)
 		_upgrade_buttons.append(button)

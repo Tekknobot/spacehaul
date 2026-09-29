@@ -10,6 +10,7 @@ const MECHA_IDS := ["M1", "M2", "M3", "R1", "R2", "R3", "R4", "S1", "S2", "S3"]
 @export var deck_path := NodePath("../ProceduralDeck")
 @export var randomize_each_run := true
 @export var fixed_starting_mecha := "M1"
+@export var auto_start := false
 
 @onready var deck: ProceduralDeck = get_node(deck_path) as ProceduralDeck
 
@@ -20,13 +21,19 @@ var _rng := RandomNumberGenerator.new()
 func _ready() -> void:
 	InputSetupScript.ensure_actions()
 	_rng.randomize()
-	start_new_run(false)
+	if auto_start:
+		start_new_run(false)
 
 func start_new_run(force_random: bool = true) -> void:
 	_clear_mechas()
 	var chosen_id := fixed_starting_mecha
 	if randomize_each_run or force_random:
 		chosen_id = MECHA_IDS[_rng.randi_range(0, MECHA_IDS.size() - 1)]
+	_spawn_single_mecha(chosen_id)
+
+
+func start_new_run_with_mecha(chosen_id: String) -> void:
+	_clear_mechas()
 	_spawn_single_mecha(chosen_id)
 
 func _clear_mechas() -> void:
