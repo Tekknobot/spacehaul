@@ -69,6 +69,7 @@ script = ExtResource("2_deck")
 [node name="MechaManager" type="Node2D" parent="." unique_id=308486086]
 script = ExtResource("3_manager")
 randomize_each_run = false
+fixed_starting_mecha = "M2"
 
 [node name="EnemyManager" type="Node2D" parent="." unique_id=1764950342]
 script = ExtResource("7_enemy_manager")

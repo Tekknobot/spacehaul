@@ -343,31 +343,98 @@ func _radial_hit(at: Vector2, radius: float, outward: bool = true) -> void:
 				push = direction
 		collider.call("take_projectile_hit", push.normalized())
 
+# Every damaging rendered trajectory resolves contact through this helper.
+# Each enemy can be hit only once per trajectory, but a direct intersection now
+# always produces a local impact burst and passes the trajectory direction into
+# take_projectile_hit(), preserving the project's normal knockback response.
+func _trajectory_contact_fx(at: Vector2, radius: float = 7.0) -> void:
+	var core := Color(1.6, 2.9, 3.3, 1.0)
+	var glow := Color(0.2, 0.85, 1.55, 1.0)
+
+	match mecha_id:
+		"M1":
+			core = Color(3.0, 1.55, 0.55, 1.0)
+			glow = Color(1.5, 0.40, 0.08, 1.0)
+		"M2":
+			core = Color(1.2, 2.9, 3.2, 1.0)
+			glow = Color(0.2, 0.95, 1.4, 1.0)
+		"M3":
+			core = Color(3.0, 1.45, 0.40, 1.0)
+			glow = Color(1.5, 0.35, 0.08, 1.0)
+		"R1":
+			core = Color(1.45, 3.0, 3.35, 1.0)
+			glow = Color(0.2, 0.9, 1.5, 1.0)
+		"R2":
+			core = Color(3.05, 1.55, 0.42, 1.0)
+			glow = Color(1.5, 0.40, 0.08, 1.0)
+		"R3":
+			core = Color(1.55, 2.75, 3.25, 1.0)
+			glow = Color(0.2, 0.8, 1.5, 1.0)
+		"R4":
+			core = Color(2.55, 1.45, 3.3, 1.0)
+			glow = Color(1.0, 0.25, 1.7, 1.0)
+		"S1":
+			core = Color(3.15, 1.15, 0.48, 1.0)
+			glow = Color(1.6, 0.30, 0.08, 1.0)
+		"S2":
+			core = Color(1.35, 2.75, 3.4, 1.0)
+			glow = Color(0.2, 0.7, 1.6, 1.0)
+		"S3":
+			core = Color(2.05, 2.65, 3.4, 1.0)
+			glow = Color(0.55, 0.85, 1.8, 1.0)
+
+	_ability_impact_fx(at.round(), core, glow, radius)
+
+
 func _damage_line(from: Vector2, to: Vector2, radius: float = 5.0) -> void:
 	if get_world_2d() == null:
 		return
+
 	var delta := to - from
+	var push_dir := delta.normalized()
+	if push_dir.length_squared() <= 0.001:
+		push_dir = direction
+	if push_dir.length_squared() <= 0.001:
+		push_dir = Vector2.RIGHT
+
 	var steps := maxi(1, int(ceil(delta.length() / 10.0)))
 	var hit_ids := {}
+
 	for i in range(steps + 1):
 		var p := from.lerp(to, float(i) / float(steps))
 		var shape := CircleShape2D.new()
 		shape.radius = maxf(1.0, radius)
+
 		var query := PhysicsShapeQueryParameters2D.new()
 		query.shape = shape
 		query.transform = Transform2D(0.0, p)
 		query.collision_mask = 2
 		query.collide_with_bodies = true
 		query.collide_with_areas = true
+
 		for hit in get_world_2d().direct_space_state.intersect_shape(query, 32):
 			var collider := hit.get("collider") as Object
 			if collider == null or not collider.has_method("take_projectile_hit"):
 				continue
+
 			var id := collider.get_instance_id()
 			if hit_ids.has(id):
 				continue
+
 			hit_ids[id] = true
-			collider.call("take_projectile_hit", delta.normalized())
+
+			# Use the enemy's actual position for the contact flash when possible, so
+			# the explosion reads as a true collision with the rendered trajectory.
+			var impact_at := p.round()
+			var body := collider as Node2D
+			if body != null:
+				impact_at = body.global_position.round()
+
+			collider.call("take_projectile_hit", push_dir)
+			_trajectory_contact_fx(
+				impact_at,
+				clampf(5.5 + radius * 0.45, 6.0, 10.0)
+			)
 
 func _straight_shot_from(start: Vector2, dest: Vector2, core: Color, glow: Color, travel_time: float = 0.18, explode_radius: float = 14.0) -> void:
 	var projectile := ProjectileFxScript.new() as SpacehaulSpecialProjectile
@@ -376,6 +443,12 @@ func _straight_shot_from(start: Vector2, dest: Vector2, core: Color, glow: Color
 	_spawn_follow_particles(projectile, core, glow, travel_time + 0.05, 58.0)
 	var tracer := _line(start, dest, Color(core.r, core.g, core.b, 0.72), Color(glow.r, glow.g, glow.b, 0.22))
 	_fade_free(tracer, minf(0.12, travel_time))
+
+	# The visible tracer is a real attack trajectory. Enemies touching it now
+	# receive the same contact hit / explosion / directional knockback rule as
+	# every other damaging line-based special ability.
+	_damage_line(start, dest, 4.0)
+
 	var tween := root.create_tween()
 	tween.tween_property(projectile, "global_position", dest.round(), travel_time)
 	await tween.finished
