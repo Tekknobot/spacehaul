@@ -23,10 +23,15 @@ const FLOOR_TEXTURES: Array[Texture2D] = [
 	preload("res://Sprites/Tiles/FloorTiles/floor_base_16.png"),
 ]
 
-# A restrained set of clean plates forms most walking surfaces; the remaining
-# technical/grille/panel tiles are mixed in as detail. All sixteen are used.
-const FLOOR_COMMON_INDICES: Array[int] = [0, 4, 5, 8, 9, 10]
-const FLOOR_DETAIL_INDICES: Array[int] = [1, 2, 3, 6, 7, 11, 12, 13, 14, 15]
+# FloorTiles are authored in rarity order. Earlier numbered tiles are the
+# structural vocabulary of a deck; later numbered tiles are increasingly rare
+# feature panels. The weights total 100 so they also read as percentages.
+# 01: 32%, 02: 19%, 03: 12%, 04: 9%, then progressively rarer through 16.
+const FLOOR_TILE_WEIGHTS: Array[float] = [
+	45.0, 15.368, 9.706, 7.279, 5.662, 4.044, 3.235, 2.426,
+	2.022, 1.618, 1.213, 0.809, 0.607, 0.404, 0.324, 0.283,
+]
+const FLOOR_FEATURE_START_INDEX := 8
 
 const DECK_PALETTE_SHADER: Shader = preload("res://Shaders/deck_palette.gdshader")
 const WALL_TEXTURES: Array[Texture2D] = [
@@ -326,7 +331,6 @@ func _select_decorations() -> void:
 	_floor_styles.clear()
 
 	var floor_cells: Array[Vector2i] = []
-	var detail_chance := clampf(floor_grill_chance + floor_light_chance, 0.0, 0.65)
 
 	for x in range(1, grid_width - 1):
 		for y in range(1, grid_height - 1):
@@ -334,32 +338,67 @@ func _select_decorations() -> void:
 				continue
 
 			var cell := Vector2i(x, y)
-			var tile_index := _choose_floor_tile_index(cell, detail_chance)
+			var tile_index := _choose_floor_tile_index(cell)
 			_floor_styles[cell] = tile_index
 
-			if tile_index in FLOOR_DETAIL_INDICES:
+			# Later authored tiles are feature panels rather than general floor fill.
+			if tile_index >= FLOOR_FEATURE_START_INDEX:
 				_accent_cells.append(cell)
 
 			if Vector2(cell).distance_to(Vector2(_start_cell)) >= 7.0:
 				floor_cells.append(cell)
 
 	# Hazards are gameplay metadata now, not a special floor texture. This keeps
-	# the new FloorTiles art intact and lets any floor design become dangerous.
+	# the FloorTiles art intact and lets any floor design become dangerous.
 	_shuffle_cells(floor_cells)
 	for i in range(mini(hazard_count, floor_cells.size())):
 		_hazard_cells.append(floor_cells[i])
 
-func _choose_floor_tile_index(cell: Vector2i, detail_chance: float) -> int:
-	# Keep the exact spawn tile calm and readable underneath the mecha.
+func _choose_floor_tile_index(cell: Vector2i) -> int:
+	# The spawn pad always uses the most common structural tile so the player
+	# enters each deck on a calm, immediately readable surface.
 	if cell == _start_cell:
-		return FLOOR_COMMON_INDICES[0]
+		return 0
 
-	# Use stable procedural selection from the level RNG. Common structural plates
-	# dominate, while technical panels and grilles provide enough variation that
-	# the new sixteen-tile set is visibly represented across a deck.
-	if _rng.randf() < detail_chance:
-		return FLOOR_DETAIL_INDICES[_rng.randi_range(0, FLOOR_DETAIL_INDICES.size() - 1)]
-	return FLOOR_COMMON_INDICES[_rng.randi_range(0, FLOOR_COMMON_INDICES.size() - 1)]
+	var chosen := _weighted_floor_tile_index(FLOOR_TEXTURES.size() - 1)
+
+	# Rare feature panels look authored when they have breathing room. If a late
+	# tile would touch another late tile, usually reroll from the first eight
+	# structural variants instead of creating a noisy patchwork cluster.
+	if chosen >= FLOOR_FEATURE_START_INDEX and _has_adjacent_feature_tile(cell):
+		if _rng.randf() < 0.88:
+			chosen = _weighted_floor_tile_index(FLOOR_FEATURE_START_INDEX - 1)
+
+	return chosen
+
+func _weighted_floor_tile_index(max_index: int) -> int:
+	var upper := clampi(max_index, 0, mini(FLOOR_TEXTURES.size(), FLOOR_TILE_WEIGHTS.size()) - 1)
+	var total_weight := 0.0
+	for i in range(upper + 1):
+		total_weight += FLOOR_TILE_WEIGHTS[i]
+
+	if total_weight <= 0.0:
+		return 0
+
+	var roll := _rng.randf() * total_weight
+	var accumulated := 0.0
+	for i in range(upper + 1):
+		accumulated += FLOOR_TILE_WEIGHTS[i]
+		if roll <= accumulated:
+			return i
+
+	return upper
+
+func _has_adjacent_feature_tile(cell: Vector2i) -> bool:
+	# Selection runs left-to-right through columns, so only already-authored
+	# neighbours are considered. This is enough to break up obvious feature clumps
+	# while keeping generation deterministic for a given deck seed.
+	for neighbor in [cell + Vector2i.LEFT, cell + Vector2i.UP]:
+		if _floor_styles.has(neighbor):
+			var neighbor_index := int(_floor_styles[neighbor])
+			if neighbor_index >= FLOOR_FEATURE_START_INDEX:
+				return true
+	return false
 
 func _rebuild_floor_visuals() -> void:
 	if _floor_visual_root == null:
