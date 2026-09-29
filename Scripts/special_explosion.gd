@@ -1,6 +1,8 @@
 extends Node2D
 class_name SpacehaulSpecialExplosion
 
+const SFX = preload("res://Scripts/sound_fx.gd")
+
 const EXPLOSION_FRAME_COUNT := 14
 const EXPLOSION_FPS := 18.0
 const EXPLOSION_PATH := "res://Sprites/VFX/Explosion/explosion%d.png"
@@ -31,6 +33,12 @@ func setup(world_position: Vector2, new_core: Color, new_glow: Color, new_radius
 
 	var animation_duration := _build_explosion_animation()
 	total_duration = maxf(procedural_duration, animation_duration)
+
+	# Scale pitch slightly with blast size while routing every explosion through
+	# one shared voice. Multiple simultaneous explosion VFX therefore remain
+	# visually independent without increasing the explosion sample's volume.
+	var size_pitch := clampf(1.06 - (radius - 12.0) * 0.006, 0.82, 1.08)
+	SFX.play_explosion(self, -10.5, size_pitch)
 	queue_redraw()
 
 func _get_explosion_frames() -> SpriteFrames:

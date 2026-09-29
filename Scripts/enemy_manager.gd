@@ -126,16 +126,22 @@ func _choose_enemy_type(run_time: float) -> String:
 	return pool[_rng.randi_range(0, pool.size() - 1)]
 
 func _target_active_count(run_time: float) -> int:
-	if run_time < 25.0:
+	# Softer opening ramp: the player gets time to read enemy roles and bring the
+	# secondary system online before the first dense swarm arrives.
+	if run_time < 30.0:
 		return 5
 	if run_time < 60.0:
-		return 10
+		return 8
+	if run_time < 90.0:
+		return 12
 	if run_time < 120.0:
-		return 18
+		return 16
+	if run_time < 180.0:
+		return 21
 	if run_time < 240.0:
-		return 28
-	var scaled := 28 + int((run_time - 240.0) / 18.0) + (_get_deck_number() - 1) * 3
-	return clampi(scaled, 28, 78)
+		return 27
+	var scaled := 27 + int((run_time - 240.0) / 18.0) + (_get_deck_number() - 1) * 3
+	return clampi(scaled, 27, 78)
 
 func _spawn_batch_size(run_time: float) -> int:
 	if run_time < 120.0:
@@ -147,8 +153,8 @@ func _spawn_batch_size(run_time: float) -> int:
 	return 4
 
 func _spawn_interval(run_time: float) -> float:
-	var interval := 1.35 - run_time * 0.00125 - float(_get_deck_number() - 1) * 0.06
-	return clampf(interval, 0.24, 1.35)
+	var interval := 1.55 - run_time * 0.00135 - float(_get_deck_number() - 1) * 0.06
+	return clampf(interval, 0.24, 1.55)
 
 func _on_enemy_defeated(_salvage_value: int) -> void:
 	total_kills += 1

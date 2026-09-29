@@ -1,10 +1,11 @@
 extends Node2D
 
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
+const SFX = preload("res://Scripts/sound_fx.gd")
 
 const RUN_DURATION := 20.0 * 60.0
 const DECK_DURATION := 4.0 * 60.0
-const SECONDARY_UNLOCK_TIME := 90.0
+const SECONDARY_UNLOCK_TIME := 60.0
 
 @onready var deck: ProceduralDeck = $ProceduralDeck
 @onready var mecha_manager: MechaManager = $MechaManager
@@ -14,7 +15,7 @@ const SECONDARY_UNLOCK_TIME := 90.0
 @onready var hud: CanvasLayer = $HUD
 
 var _banner_tween: Tween
-var _hud_visible := false
+var _hud_visible := true
 var _run_time := 0.0
 var _deck_number := 1
 var _next_deck_time := DECK_DURATION
@@ -40,6 +41,14 @@ var _hud_salvage: Label
 var _hud_time: Label
 var _hud_deck: Label
 var _hud_hostiles: Label
+var _damage_overlay: ColorRect
+var _damage_material: ShaderMaterial
+var _damage_intensity := 0.0
+var _last_hull := -1
+var _low_hull_warned := false
+var _run_summary_overlay: Control
+var _run_summary_title: Label
+var _run_summary_text: Label
 
 func _enter_tree() -> void:
 	add_to_group("survival_manager")
@@ -54,8 +63,10 @@ func _ready() -> void:
 	_hide_legacy_hud()
 	deck_banner.hide()
 	_build_compact_hud()
+	_build_damage_overlay()
 	_build_upgrade_overlay()
-	_set_standard_hud_visible(false)
+	_build_run_summary_overlay()
+	_set_standard_hud_visible(true)
 
 	var active := mecha_manager.get_active_mecha()
 	if active != null:
@@ -64,8 +75,7 @@ func _ready() -> void:
 	_update_hud()
 
 func _process(delta: float) -> void:
-	if Input.is_action_just_pressed("toggle_ui") and (_upgrade_overlay == null or not _upgrade_overlay.visible):
-		_set_standard_hud_visible(not _hud_visible)
+	_update_damage_overlay(delta)
 
 	if (_game_over or _run_complete) and Input.is_action_just_pressed("regenerate_level"):
 		_restart_run()
@@ -114,6 +124,7 @@ func collect_salvage(amount: int) -> void:
 	if _game_over or _run_complete:
 		return
 	_salvage += maxi(1, amount)
+	SFX.play(self, "salvage", -18.0, clampf(0.94 + float(_salvage % 6) * 0.025, 0.94, 1.08))
 	_update_hud()
 	_check_level_up()
 
@@ -125,6 +136,7 @@ func _check_level_up() -> void:
 	_salvage -= _salvage_required
 	_level += 1
 	_salvage_required = 5 + _level * 4
+	SFX.play(self, "level", -8.0, 1.0)
 	_present_upgrade_choices()
 
 func _update_secondary_unlock() -> void:
@@ -136,6 +148,7 @@ func _update_secondary_unlock() -> void:
 		return
 	active.set_secondary_unlocked(true)
 	if active.has_secondary_ability():
+		SFX.play(self, "level", -8.0, 1.12)
 		_show_banner("SECONDARY ONLINE   RMB")
 
 func _on_active_mecha_changed(mecha: MechaController) -> void:
@@ -146,9 +159,20 @@ func _on_active_mecha_changed(mecha: MechaController) -> void:
 	if not mecha.destroyed.is_connected(_on_player_destroyed):
 		mecha.destroyed.connect(_on_player_destroyed)
 	mecha.set_secondary_unlocked(_secondary_announced)
+	_last_hull = mecha.get_hull()
+	_low_hull_warned = false
 	_update_hud()
 
-func _on_hull_changed(_current_hull: int, _max_hull: int) -> void:
+func _on_hull_changed(current_hull: int, max_hull: int) -> void:
+	if _last_hull >= 0 and current_hull < _last_hull:
+		_trigger_damage_overlay(1.0)
+	var ratio := float(current_hull) / float(maxi(1, max_hull))
+	if ratio <= 0.30 and not _low_hull_warned and current_hull > 0:
+		_low_hull_warned = true
+		SFX.play(self, "warning", -7.0, 0.92)
+	elif ratio > 0.42:
+		_low_hull_warned = false
+	_last_hull = current_hull
 	_update_hud()
 
 func _on_player_destroyed(_mecha: MechaController) -> void:
@@ -159,7 +183,8 @@ func _on_player_destroyed(_mecha: MechaController) -> void:
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
 	get_tree().paused = false
-	_show_banner("MECHA LOST   G NEW RUN", 2.5)
+	_show_banner("MECHA LOST", 1.2)
+	_show_run_summary(false)
 	_update_hud()
 
 func _complete_run() -> void:
@@ -167,13 +192,21 @@ func _complete_run() -> void:
 		return
 	_run_complete = true
 	enemy_manager.set_spawning_enabled(false)
-	_show_banner("EXTRACTION COMPLETE   G NEW RUN", 3.0)
+	_show_banner("EXTRACTION COMPLETE", 1.5)
+	_show_run_summary(true)
 	_update_hud()
 
 func _restart_run() -> void:
 	get_tree().paused = false
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
+	if _run_summary_overlay != null:
+		_run_summary_overlay.hide()
+	_damage_intensity = 0.0
+	if _damage_material != null:
+		_damage_material.set_shader_parameter("intensity", 0.0)
+	_last_hull = -1
+	_low_hull_warned = false
 	_run_time = 0.0
 	_deck_number = 1
 	_next_deck_time = DECK_DURATION
@@ -318,10 +351,136 @@ func _make_stat_cell(row: HBoxContainer, color: Color) -> Label:
 	panel.add_child(label)
 	return label
 
-func _set_standard_hud_visible(value: bool) -> void:
-	_hud_visible = value
+func _set_standard_hud_visible(_value: bool) -> void:
+	# HULL, salvage/level and run state are core combat information and stay visible.
+	_hud_visible = true
 	if _top_hud != null:
-		_top_hud.visible = value
+		_top_hud.visible = true
+
+func _build_damage_overlay() -> void:
+	_damage_overlay = ColorRect.new()
+	_damage_overlay.name = "DamageOverlay"
+	_damage_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_damage_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_damage_overlay.z_index = 900
+	_damage_overlay.color = Color.WHITE
+	hud.add_child(_damage_overlay)
+
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+uniform float intensity : hint_range(0.0, 1.0) = 0.0;
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float edge = smoothstep(0.26, 1.02, max(abs(p.x), abs(p.y)));
+	float corner = smoothstep(0.48, 1.22, length(p));
+	float scan = step(0.58, fract(FRAGCOORD.y * 0.25));
+	float alpha = max(edge * 0.54, corner * 0.36) * intensity;
+	alpha += scan * edge * intensity * 0.08;
+	COLOR = vec4(0.92, 0.055, 0.025, clamp(alpha, 0.0, 0.68));
+}
+"""
+	_damage_material = ShaderMaterial.new()
+	_damage_material.shader = shader
+	_damage_material.set_shader_parameter("intensity", 0.0)
+	_damage_overlay.material = _damage_material
+
+func _trigger_damage_overlay(strength: float = 1.0) -> void:
+	_damage_intensity = maxf(_damage_intensity, clampf(strength, 0.0, 1.0))
+	if _damage_material != null:
+		_damage_material.set_shader_parameter("intensity", _damage_intensity)
+
+func _update_damage_overlay(delta: float) -> void:
+	if _damage_intensity <= 0.0:
+		return
+	_damage_intensity = maxf(0.0, _damage_intensity - delta * 5.8)
+	if _damage_material != null:
+		_damage_material.set_shader_parameter("intensity", _damage_intensity)
+
+func _build_run_summary_overlay() -> void:
+	_run_summary_overlay = CenterContainer.new()
+	_run_summary_overlay.name = "RunSummary"
+	_run_summary_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_run_summary_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_run_summary_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	_run_summary_overlay.z_index = 700
+	_run_summary_overlay.visible = false
+	hud.add_child(_run_summary_overlay)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(330.0, 218.0)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.014, 0.021, 0.032, 0.96)
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.border_color = Color(0.24, 0.72, 0.82, 0.92)
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_left = 4
+	style.corner_radius_bottom_right = 4
+	panel.add_theme_stylebox_override("panel", style)
+	_run_summary_overlay.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 7)
+	margin.add_child(box)
+
+	_run_summary_title = Label.new()
+	_run_summary_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_run_summary_title.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
+	_run_summary_title.add_theme_font_size_override("font_size", 32)
+	_run_summary_title.add_theme_color_override("font_color", Color(0.62, 0.94, 1.0, 1.0))
+	box.add_child(_run_summary_title)
+
+	_run_summary_text = Label.new()
+	_run_summary_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_run_summary_text.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_run_summary_text.add_theme_font_size_override("font_size", 18)
+	_run_summary_text.add_theme_color_override("font_color", Color(0.82, 0.89, 0.93, 1.0))
+	box.add_child(_run_summary_text)
+
+	var hint := Label.new()
+	hint.text = "G / RB   NEW RUN"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	hint.add_theme_font_size_override("font_size", 16)
+	hint.add_theme_color_override("font_color", Color(0.52, 0.72, 0.78, 1.0))
+	box.add_child(hint)
+
+func _show_run_summary(completed: bool) -> void:
+	if _run_summary_overlay == null:
+		return
+	var active := mecha_manager.get_active_mecha()
+	var chassis := mecha_manager.get_active_mecha_name()
+	if active == null and chassis == "NONE":
+		chassis = "MECHA"
+	var best := _record_and_get_best_time(_run_time)
+	_run_summary_title.text = "EXTRACTION COMPLETE" if completed else "MECHA LOST"
+	_run_summary_text.text = "SURVIVED   %s\nKILLS      %03d\nLEVEL      %02d\nDECK       %02d\nCHASSIS    %s\nBEST       %s" % [
+		_format_time(_run_time), enemy_manager.get_total_kills(), _level, _deck_number, chassis, _format_time(best)
+	]
+	_run_summary_overlay.show()
+
+func _record_and_get_best_time(value: float) -> float:
+	var config := ConfigFile.new()
+	var path := "user://spacemecha_stats.cfg"
+	var best := 0.0
+	if config.load(path) == OK:
+		best = float(config.get_value("survival", "best_seconds", 0.0))
+	if value > best:
+		best = value
+		config.set_value("survival", "best_seconds", best)
+		config.save(path)
+	return best
 
 func _show_banner(message: String, hold_time: float = 0.8) -> void:
 	if _banner_tween != null and _banner_tween.is_valid():

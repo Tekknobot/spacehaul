@@ -337,7 +337,8 @@ func _rebuild_hazards() -> void:
 		area.position = _cell_center(cell)
 		area.monitoring = true
 		area.collision_layer = 0
-		area.collision_mask = 1
+		# Layer 1 = player, layer 2 = enemies. Hazards are environmental threats to both.
+		area.collision_mask = 3
 		var shape := ConvexPolygonShape2D.new()
 		shape.points = _diamond_points_local(tile_width * 0.40, tile_height * 0.55)
 		var collision := CollisionShape2D.new()

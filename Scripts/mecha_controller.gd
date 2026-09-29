@@ -6,6 +6,7 @@ signal destroyed(mecha)
 
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
 const SpecialAbilityScript = preload("res://Scripts/special_ability_effect.gd")
+const SFX = preload("res://Scripts/sound_fx.gd")
 
 const GAMEPAD_AIM_DEADZONE := 0.28
 
@@ -54,6 +55,10 @@ const SECONDARY_UPGRADE_LABELS := {
 @export var acceleration := 720.0
 @export var deceleration := 920.0
 @export var max_hull := 100
+@export var attack_move_multiplier := 0.78
+@export var boost_speed := 250.0
+@export var boost_duration := 0.20
+@export var boost_cooldown := 1.35
 
 @onready var animated_sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var camera: Camera2D = $Camera2D
@@ -83,6 +88,13 @@ var _secondary_cooldown_left := 0.0
 var _hurt_time := 0.0
 var _dead := false
 var _dissolve_material: ShaderMaterial
+var _combat_material: ShaderMaterial
+var _boost_time := 0.0
+var _boost_cooldown_left := 0.0
+var _boost_direction := Vector2.RIGHT
+var _boost_trail_time := 0.0
+var _camera_shake_time := 0.0
+var _camera_shake_strength := 0.0
 
 func _ready() -> void:
 	add_to_group("mechas")
@@ -91,6 +103,7 @@ func _ready() -> void:
 	_configure_survival_stats()
 	hull = max_hull
 	_build_sprite_frames()
+	_build_combat_shader()
 	animated_sprite.animation_finished.connect(_on_animation_finished)
 	animated_sprite.frame_changed.connect(_on_frame_changed)
 	animated_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -105,11 +118,26 @@ func _physics_process(delta: float) -> void:
 
 	_primary_cooldown_left = maxf(0.0, _primary_cooldown_left - delta)
 	_secondary_cooldown_left = maxf(0.0, _secondary_cooldown_left - delta)
+	_boost_cooldown_left = maxf(0.0, _boost_cooldown_left - delta)
+	_update_camera_shake(delta)
 
 	if _hurt_time > 0.0:
 		_hurt_time = maxf(0.0, _hurt_time - delta)
-		if _hurt_time <= 0.0:
-			animated_sprite.modulate = Color.WHITE
+		if _combat_material != null:
+			_combat_material.set_shader_parameter("hit_flash", clampf(_hurt_time / 0.56, 0.0, 1.0))
+	elif _combat_material != null:
+		_combat_material.set_shader_parameter("hit_flash", 0.0)
+
+	if _boost_time > 0.0:
+		_boost_time = maxf(0.0, _boost_time - delta)
+		_boost_trail_time -= delta
+		if _boost_trail_time <= 0.0:
+			_boost_trail_time = 0.035
+			_spawn_boost_afterimage()
+		if _combat_material != null:
+			_combat_material.set_shader_parameter("boost_strength", clampf(_boost_time / maxf(0.001, boost_duration), 0.0, 1.0))
+	elif _combat_material != null:
+		_combat_material.set_shader_parameter("boost_strength", 0.0)
 
 	if is_player_controlled:
 		_process_player(delta)
@@ -243,18 +271,21 @@ func repair_hull(amount: int) -> void:
 	hull_changed.emit(hull, max_hull)
 
 func take_hurt(amount: int = 10) -> void:
-	if _dead or _hurt_time > 0.0:
+	if _dead or _hurt_time > 0.0 or _boost_time > 0.0:
 		return
 	_hurt_time = 0.56
 	hull = maxi(0, hull - maxi(1, amount))
-	animated_sprite.modulate = Color(3.0, 0.62, 0.48, 1.0)
+	if _combat_material != null:
+		_combat_material.set_shader_parameter("hit_flash", 1.0)
 	velocity *= 0.25
+	_trigger_camera_shake(2.4, 0.16)
+	SFX.play(self, "player_hurt", -5.5, _rng.randf_range(0.94, 1.06))
 	hull_changed.emit(hull, max_hull)
 	if hull <= 0:
 		_die()
 
 func take_projectile_hit(direction: Vector2, amount: int = 10) -> void:
-	if _dead or _hurt_time > 0.0:
+	if _dead or _hurt_time > 0.0 or _boost_time > 0.0:
 		return
 	take_hurt(amount)
 	if direction.length_squared() > 0.001 and not _dead:
@@ -264,8 +295,11 @@ func _process_player(delta: float) -> void:
 	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attack_direction := _get_attack_direction()
 
-	if not attacking:
-		# Primary is deliberately hold-to-fire for the survival-game loop.
+	if Input.is_action_just_pressed("dash") and _boost_cooldown_left <= 0.0:
+		_start_boost(move_input, attack_direction)
+
+	if _boost_time <= 0.0 and not attacking:
+		# Primary remains hold-to-fire, but firing no longer roots the chassis.
 		if Input.is_action_pressed("shoot") and _primary_cooldown_left <= 0.0:
 			_attack_target = _get_attack_target(attack_direction)
 			_attack_alternate = false
@@ -277,23 +311,83 @@ func _process_player(delta: float) -> void:
 			_secondary_cooldown_left = _secondary_cooldown
 			_start_attack(attack_direction, true)
 
-	if attacking:
-		velocity = velocity.move_toward(Vector2.ZERO, deceleration * delta)
+	if _boost_time > 0.0:
+		velocity = _boost_direction * boost_speed
+		_update_facing(_boost_direction)
 	else:
 		var speed := player_run_speed if Input.is_action_pressed("run") else player_walk_speed
+		if attacking:
+			speed *= attack_move_multiplier
 		var target_velocity := move_input * speed
 		var rate := acceleration if move_input.length_squared() > 0.01 else deceleration
 		velocity = velocity.move_toward(target_velocity, rate * delta)
 
 		if move_input.length_squared() > 0.02:
 			last_move_direction = move_input.normalized()
-			_update_facing(last_move_direction)
-			_play_if_needed("move")
-		else:
+			if not attacking:
+				_update_facing(last_move_direction)
+				_play_if_needed("move")
+		elif not attacking:
 			_update_facing(last_move_direction)
 			_play_if_needed("idle")
 
 	move_and_slide()
+
+func _start_boost(move_input: Vector2, attack_direction: Vector2) -> void:
+	if _dead or _boost_time > 0.0:
+		return
+	var direction := move_input.normalized()
+	if direction.length_squared() <= 0.001:
+		direction = last_move_direction
+	if direction.length_squared() <= 0.001:
+		direction = attack_direction
+	if direction.length_squared() <= 0.001:
+		direction = Vector2.RIGHT
+	_boost_direction = direction.normalized()
+	last_move_direction = _boost_direction
+	_boost_time = boost_duration
+	_boost_cooldown_left = boost_cooldown
+	_boost_trail_time = 0.0
+	_trigger_camera_shake(0.75, 0.08)
+	SFX.play(self, "boost", -7.0, _rng.randf_range(0.96, 1.05))
+	_spawn_boost_afterimage()
+
+func _spawn_boost_afterimage() -> void:
+	if animated_sprite == null or animated_sprite.sprite_frames == null:
+		return
+	var texture := animated_sprite.sprite_frames.get_frame_texture(animated_sprite.animation, animated_sprite.frame)
+	if texture == null:
+		return
+	var ghost := Sprite2D.new()
+	ghost.texture = texture
+	ghost.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	ghost.flip_h = animated_sprite.flip_h
+	ghost.z_as_relative = false
+	ghost.z_index = z_index - 1
+	ghost.modulate = Color(0.35, 1.5, 2.2, 0.34)
+	get_tree().current_scene.add_child(ghost)
+	ghost.global_position = animated_sprite.global_position
+	var tween := ghost.create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(ghost, "global_position", ghost.global_position - _boost_direction * 13.0, 0.16)
+	tween.tween_property(ghost, "modulate:a", 0.0, 0.16)
+	tween.set_parallel(false)
+	tween.tween_callback(ghost.queue_free)
+
+func _trigger_camera_shake(strength: float, duration: float) -> void:
+	_camera_shake_strength = maxf(_camera_shake_strength, strength)
+	_camera_shake_time = maxf(_camera_shake_time, duration)
+
+func _update_camera_shake(delta: float) -> void:
+	if camera == null:
+		return
+	if _camera_shake_time > 0.0:
+		_camera_shake_time = maxf(0.0, _camera_shake_time - delta)
+		var falloff := clampf(_camera_shake_time / 0.18, 0.0, 1.0)
+		camera.offset = Vector2(_rng.randf_range(-1.0, 1.0), _rng.randf_range(-1.0, 1.0)) * _camera_shake_strength * falloff
+	else:
+		camera.offset = camera.offset.move_toward(Vector2.ZERO, 80.0 * delta)
+		_camera_shake_strength = 0.0
 
 func _configure_survival_stats() -> void:
 	match mecha_id:
@@ -354,6 +448,9 @@ func _on_frame_changed() -> void:
 		return
 	if animated_sprite.frame >= _attack_fire_frame:
 		_attack_projectile_pending = false
+		# Fire audio on the exact frame that creates the ability instead of at
+		# animation start, keeping muzzle/impact timing coherent.
+		SFX.play(self, "secondary" if _attack_alternate else "primary", -10.0 if not _attack_alternate else -7.5, _rng.randf_range(0.97, 1.04))
 		_spawn_special_ability(_attack_direction)
 
 func _on_animation_finished() -> void:
@@ -471,6 +568,29 @@ void fragment() {
 func _set_dissolve_amount(value: float) -> void:
 	if _dissolve_material != null:
 		_dissolve_material.set_shader_parameter("dissolve_amount", value)
+
+
+func _build_combat_shader() -> void:
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+render_mode unshaded;
+uniform float hit_flash : hint_range(0.0, 1.0) = 0.0;
+uniform float boost_strength : hint_range(0.0, 1.0) = 0.0;
+void fragment() {
+	vec4 tex = texture(TEXTURE, UV);
+	if (tex.a < 0.01) { discard; }
+	float stripe = step(0.5, fract((UV.y + UV.x * 0.18) * 24.0));
+	vec3 boosted = tex.rgb + vec3(0.10, 0.78, 1.15) * boost_strength * (0.28 + stripe * 0.42);
+	vec3 hurt = mix(boosted, vec3(1.0, 0.20, 0.10), hit_flash * 0.78);
+	COLOR = vec4(hurt, tex.a) * COLOR;
+}
+"""
+	_combat_material = ShaderMaterial.new()
+	_combat_material.shader = shader
+	_combat_material.set_shader_parameter("hit_flash", 0.0)
+	_combat_material.set_shader_parameter("boost_strength", 0.0)
+	animated_sprite.material = _combat_material
 
 func _build_sprite_frames() -> void:
 	var frames := SpriteFrames.new()

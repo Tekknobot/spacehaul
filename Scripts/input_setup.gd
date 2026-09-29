@@ -73,9 +73,8 @@ static func ensure_actions() -> void:
 	_add_key("regenerate_level", KEY_G)
 	_add_joy_button("regenerate_level", JOY_BUTTON_RIGHT_SHOULDER)
 
-	# Survival runs use a single chassis. TAB now owns the compact HUD toggle;
-	# the old switch-mecha binding is intentionally left unbound.
-	_add_key("toggle_ui", KEY_TAB)
+	# Survival HUD is now persistent. Keep the action registered for compatibility,
+	# but TAB is intentionally not required for core run information.
 
 static func _add_action(action: StringName, deadzone: float = 0.2) -> void:
 	if not InputMap.has_action(action):

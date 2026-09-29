@@ -5,6 +5,7 @@ signal defeated(salvage_value: int)
 
 const EnemyProjectileScript = preload("res://Scripts/enemy_projectile.gd")
 const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
+const SFX = preload("res://Scripts/sound_fx.gd")
 
 const FRAME_SIZE := Vector2(32.0, 32.0)
 const FRAME_COUNT := 8
@@ -29,6 +30,7 @@ const ENEMY_SHEETS := {
 var deck: ProceduralDeck
 var home_position := Vector2.ZERO
 var health := 2
+var max_health := 2
 var move_speed := 66.0
 var aggro_range := 270.0
 var melee_range := 18.0
@@ -58,6 +60,9 @@ var _charge_direction := Vector2.RIGHT
 var _rng := RandomNumberGenerator.new()
 var _dissolve_material: ShaderMaterial
 var _base_sprite_position := Vector2(0.0, -12.0)
+var _health_bar_time := 0.0
+var _telegraphing := false
+var _base_modulate := Color.WHITE
 
 func _ready() -> void:
 	add_to_group("enemies")
@@ -83,6 +88,10 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_attack_time = maxf(0.0, _attack_time - delta)
+	if _health_bar_time > 0.0:
+		_health_bar_time = maxf(0.0, _health_bar_time - delta)
+		if _health_bar_time <= 0.0 and not elite:
+			queue_redraw()
 	_target_refresh_time -= delta
 	_repath_time -= delta
 	_wander_time -= delta
@@ -91,7 +100,7 @@ func _physics_process(delta: float) -> void:
 		_hurt_time = maxf(0.0, _hurt_time - delta)
 		velocity = velocity.move_toward(Vector2.ZERO, 520.0 * delta)
 		if _hurt_time <= 0.0:
-			animated_sprite.modulate = Color.WHITE
+			animated_sprite.modulate = _base_modulate
 			animated_sprite.position = _base_sprite_position
 		move_and_slide()
 		return
@@ -121,6 +130,12 @@ func _physics_process(delta: float) -> void:
 			velocity *= 0.25
 		return
 
+	if _telegraphing:
+		velocity = velocity.move_toward(Vector2.ZERO, 720.0 * delta)
+		animated_sprite.speed_scale = 0.45
+		move_and_slide()
+		return
+
 	animated_sprite.speed_scale = 1.0
 	if _target == null or not is_instance_valid(_target):
 		_process_wander(delta)
@@ -137,7 +152,7 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if shocker and distance <= 54.0 and _attack_time <= 0.0:
-		_fire_shock_pulse()
+		_begin_shock_telegraph()
 		return
 
 	if ranged:
@@ -171,7 +186,7 @@ func _process_ranged(delta: float, to_target: Vector2, distance: float) -> void:
 		velocity = velocity.move_toward(Vector2.ZERO, 560.0 * delta)
 		_update_facing(direction)
 		if _attack_time <= 0.0:
-			_fire_projectile(direction)
+			_begin_ranged_telegraph(direction)
 	move_and_slide()
 
 func _process_wander(delta: float) -> void:
@@ -274,6 +289,74 @@ func _spawn_melee_pixel(direction: Vector2) -> void:
 	tw.tween_property(line, "modulate:a", 0.0, 0.10)
 	tw.tween_callback(line.queue_free)
 
+func _begin_ranged_telegraph(direction: Vector2) -> void:
+	if _telegraphing or _dead:
+		return
+	_telegraphing = true
+	_attack_time = attack_cooldown
+	_update_facing(direction)
+	_spawn_ranged_telegraph(direction)
+	await get_tree().create_timer(0.22).timeout
+	if _dead or not is_inside_tree():
+		return
+	_telegraphing = false
+	_fire_projectile(direction)
+
+func _spawn_ranged_telegraph(direction: Vector2) -> void:
+	var origin := global_position + Vector2(0.0, -12.0)
+	var line := Line2D.new()
+	line.width = 1.0
+	line.default_color = Color(projectile_glow.r, projectile_glow.g, projectile_glow.b, 0.68)
+	line.antialiased = false
+	line.add_point(origin.round())
+	line.add_point((origin + direction * 25.0).round())
+	line.z_as_relative = false
+	line.z_index = 1660
+	get_tree().current_scene.add_child(line)
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	line.material = additive
+	var tw := line.create_tween()
+	tw.tween_property(line, "modulate:a", 0.12, 0.18)
+	tw.tween_callback(line.queue_free)
+
+func _begin_shock_telegraph() -> void:
+	if _telegraphing or _dead:
+		return
+	_telegraphing = true
+	_attack_time = attack_cooldown * 1.45
+	velocity = Vector2.ZERO
+	_spawn_shock_warning_ring()
+	await get_tree().create_timer(0.34).timeout
+	if _dead or not is_inside_tree():
+		return
+	_telegraphing = false
+	_fire_shock_pulse()
+
+func _spawn_shock_warning_ring() -> void:
+	var ring := Line2D.new()
+	ring.width = 1.0
+	ring.default_color = Color(0.55, 2.6, 3.2, 0.66)
+	ring.antialiased = false
+	var points := PackedVector2Array()
+	for i in range(17):
+		var angle := TAU * float(i) / 16.0
+		points.append((Vector2(cos(angle), sin(angle)) * 8.0).round())
+	ring.points = points
+	ring.z_as_relative = false
+	ring.z_index = 1635
+	get_tree().current_scene.add_child(ring)
+	ring.global_position = global_position + Vector2(0.0, -8.0)
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	ring.material = additive
+	var tw := ring.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(ring, "scale", Vector2.ONE * 6.6, 0.34)
+	tw.tween_property(ring, "modulate:a", 0.0, 0.34)
+	tw.set_parallel(false)
+	tw.tween_callback(ring.queue_free)
+
 func _fire_projectile(direction: Vector2) -> void:
 	if _target == null:
 		return
@@ -282,6 +365,7 @@ func _fire_projectile(direction: Vector2) -> void:
 	var muzzle := global_position + Vector2(0.0, -12.0) + direction * 9.0
 	projectile.setup(muzzle, direction, get_rid(), projectile_color, projectile_glow, projectile_speed)
 	_attack_time = attack_cooldown
+	SFX.play(self, "enemy_shot", -18.0, _rng.randf_range(0.90, 1.10))
 
 	# Spider sentinels fire a slightly offset second pixel after a short delay.
 	if enemy_type == "spider_3":
@@ -295,10 +379,12 @@ func _fire_delayed_second_shot(direction: Vector2) -> void:
 	var projectile := EnemyProjectileScript.new() as SpacehaulEnemyProjectile
 	get_tree().current_scene.add_child(projectile)
 	projectile.setup(global_position + Vector2(0.0, -12.0) + direction * 9.0, direction, get_rid(), projectile_color, projectile_glow, projectile_speed * 0.92)
+	SFX.play(self, "enemy_shot", -20.0, _rng.randf_range(0.95, 1.08))
 
 func _fire_shock_pulse() -> void:
 	_attack_time = attack_cooldown * 1.45
 	velocity = Vector2.ZERO
+	SFX.play(self, "enemy_shot", -16.5, _rng.randf_range(0.72, 0.82))
 	var center := global_position + Vector2(0.0, -8.0)
 	for i in range(8):
 		var angle := TAU * float(i) / 8.0
@@ -321,12 +407,16 @@ func take_projectile_hit(direction: Vector2) -> void:
 	if _dead:
 		return
 	health -= 1
+	_health_bar_time = 1.15
 	_hurt_time = 0.16
 	velocity = direction.normalized() * 72.0
 	animated_sprite.modulate = Color(3.0, 0.72, 0.52, 1.0)
 	animated_sprite.position = _base_sprite_position + Vector2(float(-1 if direction.x > 0.0 else 1), 0.0)
+	queue_redraw()
 	if health <= 0:
 		_die()
+	else:
+		SFX.play(self, "enemy_hit", -24.0, _rng.randf_range(0.92, 1.10))
 
 func take_hurt() -> void:
 	take_projectile_hit(Vector2.ZERO)
@@ -344,6 +434,7 @@ func _die() -> void:
 	animated_sprite.position = _base_sprite_position
 	animated_sprite.modulate = Color.WHITE
 	_spawn_salvage()
+	SFX.play(get_tree().current_scene, "enemy_die", -22.0, _rng.randf_range(0.90, 1.08))
 	defeated.emit(salvage_value)
 	_start_pixel_dissolve()
 
@@ -525,7 +616,23 @@ func apply_difficulty(run_time: float, deck_number: int, make_elite: bool = fals
 		attack_cooldown *= 0.88
 		salvage_value += 4
 		animated_sprite.scale = Vector2.ONE * 1.22
-		animated_sprite.modulate = Color(1.25, 1.0, 0.72, 1.0)
+		_base_modulate = Color(1.25, 1.0, 0.72, 1.0)
+		animated_sprite.modulate = _base_modulate
+	max_health = health
+	queue_redraw()
+
+func _draw() -> void:
+	if _dead or max_health <= 0:
+		return
+	if not elite and _health_bar_time <= 0.0:
+		return
+	var ratio := clampf(float(health) / float(max_health), 0.0, 1.0)
+	var width := 18.0 if not elite else 24.0
+	var y := -31.0 if not elite else -34.0
+	draw_rect(Rect2(Vector2(-width * 0.5 - 1.0, y - 1.0), Vector2(width + 2.0, 4.0)), Color(0.02, 0.025, 0.035, 0.9), true)
+	draw_rect(Rect2(Vector2(-width * 0.5, y), Vector2(width, 2.0)), Color(0.22, 0.08, 0.06, 0.95), true)
+	var bar_color := Color(1.0, 0.78, 0.28, 1.0) if elite else Color(0.95, 0.30, 0.20, 1.0)
+	draw_rect(Rect2(Vector2(-width * 0.5, y), Vector2(maxf(1.0, width * ratio), 2.0)), bar_color, true)
 
 func _build_animation() -> void:
 	var texture_path := String(ENEMY_SHEETS.get(enemy_type, ENEMY_SHEETS["bug_1"]))
