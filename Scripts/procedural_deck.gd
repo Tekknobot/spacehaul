@@ -99,6 +99,8 @@ var _hazard_cells: Array[Vector2i] = []
 var _accent_cells: Array[Vector2i] = []
 var _floor_styles: Dictionary = {}
 var _start_cell := Vector2i.ONE
+var _floor_visual_root: Node2D
+var _overlay_visual_root: Node2D
 var _wall_visual_root: Node2D
 var _path_grid := AStarGrid2D.new()
 var _deck_palette_index := 0
@@ -111,12 +113,25 @@ func _ready() -> void:
 	z_as_relative = false
 	z_index = -1000
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_floor_visual_root = get_node_or_null("FloorVisualRoot") as Node2D
+	if _floor_visual_root == null:
+		_floor_visual_root = Node2D.new()
+		_floor_visual_root.name = "FloorVisualRoot"
+		add_child(_floor_visual_root)
+	_floor_visual_root.z_index = 0
+
+	_overlay_visual_root = get_node_or_null("OverlayVisualRoot") as Node2D
+	if _overlay_visual_root == null:
+		_overlay_visual_root = Node2D.new()
+		_overlay_visual_root.name = "OverlayVisualRoot"
+		add_child(_overlay_visual_root)
+	_overlay_visual_root.z_index = 1
+
 	_wall_visual_root = get_node_or_null("WallVisualRoot") as Node2D
 	if _wall_visual_root == null:
 		_wall_visual_root = Node2D.new()
 		_wall_visual_root.name = "WallVisualRoot"
 		add_child(_wall_visual_root)
-	_build_deck_palette_shader()
 	set_deck_palette(1)
 	generate_new_level()
 
@@ -127,11 +142,19 @@ func generate_new_level(requested_seed: int = -1) -> void:
 	_build_room_and_hall_deck()
 	_rebuild_path_grid()
 	_select_decorations()
+	_rebuild_floor_visuals()
 	_rebuild_collisions()
 	_rebuild_wall_visuals()
 	_rebuild_hazards()
+	_rebuild_overlay_visuals()
 	_update_deck_bounds()
 	spawn_position = _cell_center(_start_cell)
+
+	# Rebind a fresh runtime material after all procedural visuals exist. This is
+	# deliberate: walls are recreated during regeneration and must receive the
+	# currently selected palette immediately, even while the scene tree is paused
+	# for the cinematic deck transfer.
+	refresh_deck_palette()
 	queue_redraw()
 	regenerated.emit(spawn_position, seed_value)
 
@@ -323,6 +346,35 @@ func _select_decorations() -> void:
 		_hazard_cells.append(hazard_cell)
 		_floor_styles[hazard_cell] = FloorStyle.HAZARD
 
+func _rebuild_floor_visuals() -> void:
+	if _floor_visual_root == null:
+		return
+	_clear_children(_floor_visual_root)
+
+	# Floor tiles are real Sprite2D CanvasItems instead of texture calls inside
+	# ProceduralDeck._draw(). A canvas_item shader attached to a Sprite2D always
+	# receives that sprite texture as TEXTURE, so runtime palette changes are
+	# explicit and reliable in Godot 4.6.
+	for diagonal in range(grid_width + grid_height - 1):
+		for x in range(grid_width):
+			var y := diagonal - x
+			if y < 0 or y >= grid_height or not _walkable[x][y]:
+				continue
+			var cell := Vector2i(x, y)
+			var style := int(_floor_styles.get(cell, FloorStyle.BASE))
+			var texture := _floor_texture_for_style(style)
+			if texture == null:
+				texture = FLOOR_BASE_TEXTURE
+			var sprite := Sprite2D.new()
+			sprite.name = "Floor_%d_%d" % [x, y]
+			sprite.texture = texture
+			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			sprite.centered = true
+			sprite.position = _cell_center(cell).round()
+			if _deck_palette_material != null:
+				sprite.material = _deck_palette_material
+			_floor_visual_root.add_child(sprite)
+
 func _rebuild_collisions() -> void:
 	_clear_children(collision_root)
 	var body := StaticBody2D.new()
@@ -401,6 +453,69 @@ func _rebuild_hazards() -> void:
 		area.body_entered.connect(_on_hazard_body_entered)
 		hazard_root.add_child(area)
 
+func _rebuild_overlay_visuals() -> void:
+	if _overlay_visual_root == null:
+		return
+	_clear_children(_overlay_visual_root)
+
+	var accent := Color("59d4e8")
+	if _deck_palette_index > 0 and _deck_palette_index < DECK_PALETTES.size():
+		var palette: Dictionary = DECK_PALETTES[_deck_palette_index]
+		var colors: Array = palette.get("colors", [])
+		if colors.size() >= 7:
+			accent = colors[6]
+
+	for cell in _hazard_cells:
+		var outline := Line2D.new()
+		outline.name = "HazardOutline_%d_%d" % [cell.x, cell.y]
+		outline.position = _cell_center(cell)
+		outline.points = _closed_polygon(_diamond_points(Vector2.ZERO, tile_width - 2.0, tile_height - 1.0))
+		outline.width = 1.0
+		outline.default_color = accent.lightened(0.12)
+		outline.antialiased = false
+		_overlay_visual_root.add_child(outline)
+
+	var center := _cell_center(_start_cell)
+	var outer_points := _diamond_points(Vector2.ZERO, 34.0, 18.0)
+	var inner_points := _diamond_points(Vector2.ZERO, 24.0, 12.0)
+
+	var pad := Polygon2D.new()
+	pad.name = "SpawnPadFill"
+	pad.position = center
+	pad.polygon = outer_points
+	pad.color = accent.darkened(0.68)
+	_overlay_visual_root.add_child(pad)
+
+	var outer_line := Line2D.new()
+	outer_line.name = "SpawnPadOuter"
+	outer_line.position = center
+	outer_line.points = _closed_polygon(outer_points)
+	outer_line.width = 2.0
+	outer_line.default_color = accent.lightened(0.18)
+	outer_line.antialiased = false
+	_overlay_visual_root.add_child(outer_line)
+
+	var inner_line := Line2D.new()
+	inner_line.name = "SpawnPadInner"
+	inner_line.position = center
+	inner_line.points = _closed_polygon(inner_points)
+	inner_line.width = 1.0
+	inner_line.default_color = accent.darkened(0.20)
+	inner_line.antialiased = false
+	_overlay_visual_root.add_child(inner_line)
+
+	for segment in [
+		PackedVector2Array([Vector2(-7.0, 0.0), Vector2(7.0, 0.0)]),
+		PackedVector2Array([Vector2(0.0, -4.0), Vector2(0.0, 4.0)]),
+	]:
+		var cross := Line2D.new()
+		cross.position = center
+		cross.points = segment
+		cross.width = 1.0
+		cross.default_color = accent.lightened(0.18)
+		cross.antialiased = false
+		_overlay_visual_root.add_child(cross)
+
 func _on_hazard_body_entered(body: Node) -> void:
 	if body.has_method("take_hurt"):
 		body.call_deferred("take_hurt")
@@ -409,12 +524,29 @@ func set_deck_palette(deck_number: int) -> void:
 	if DECK_PALETTES.is_empty():
 		return
 	_deck_palette_index = (maxi(1, deck_number) - 1) % DECK_PALETTES.size()
+	refresh_deck_palette()
+
+func refresh_deck_palette() -> void:
+	if DECK_PALETTES.is_empty():
+		return
+
+	# Always create a fresh material instance when the palette changes or the
+	# procedural deck is rebuilt. This makes runtime palette switching explicit
+	# instead of depending on an older ShaderMaterial remaining attached to
+	# regenerated CanvasItems.
+	_build_deck_palette_shader()
+	_apply_current_palette_uniforms()
+	_apply_palette_material_to_visuals()
+	queue_redraw()
+
+func _apply_current_palette_uniforms() -> void:
 	if _deck_palette_material == null:
-		_build_deck_palette_shader()
+		return
 	var palette: Dictionary = DECK_PALETTES[_deck_palette_index]
 	var colors: Array = palette.get("colors", [])
-	if colors.size() < 7 or _deck_palette_material == null:
+	if colors.size() < 7:
 		return
+
 	_deck_palette_material.set_shader_parameter("palette_0", colors[0])
 	_deck_palette_material.set_shader_parameter("palette_1", colors[1])
 	_deck_palette_material.set_shader_parameter("palette_2", colors[2])
@@ -422,13 +554,58 @@ func set_deck_palette(deck_number: int) -> void:
 	_deck_palette_material.set_shader_parameter("palette_4", colors[4])
 	_deck_palette_material.set_shader_parameter("palette_5", colors[5])
 	_deck_palette_material.set_shader_parameter("palette_accent", colors[6])
-	# Deck 1 preserves the original authored tile palette exactly. Later decks
-	# recolor strongly while the shader preserves per-pixel brightness/contrast.
-	var grade_strength := 0.0 if _deck_palette_index == 0 else 0.82
+
+	# Deck 1 is the untouched authored palette. Subsequent decks are intentionally
+	# strong enough to read instantly while preserving source-pixel brightness.
+	var grade_strength := 0.0 if _deck_palette_index == 0 else 1.0
 	_deck_palette_material.set_shader_parameter("grade_strength", grade_strength)
-	_deck_palette_material.set_shader_parameter("accent_strength", 0.94)
-	material = _deck_palette_material
-	queue_redraw()
+	_deck_palette_material.set_shader_parameter("accent_strength", 1.0)
+	print("[SPACEMECHA] Runtime deck palette DECK %d %s grade %.2f" % [
+		_deck_palette_index + 1, get_deck_palette_name(), grade_strength
+	])
+
+func _deck_fallback_modulate() -> Color:
+	# A light root-level tint backs up the shader and makes a palette change
+	# visible even on a renderer that handles custom canvas materials differently.
+	# Values above 1.0 intentionally preserve brightness instead of dimming art.
+	match _deck_palette_index:
+		1:
+			return Color(1.24, 1.10, 0.72, 1.0)
+		2:
+			return Color(0.78, 1.18, 1.18, 1.0)
+		3:
+			return Color(0.94, 0.82, 1.16, 1.0)
+		4:
+			return Color(0.96, 0.98, 1.02, 1.0)
+		_:
+			return Color.WHITE
+
+func _apply_palette_material_to_visuals() -> void:
+	# Keep ProceduralDeck itself unshaded. It only draws the deep background now.
+	# The actual textured environment uses Sprite2D nodes with an explicit
+	# ShaderMaterial, which makes runtime texture sampling deterministic.
+	material = null
+	var fallback_tint := _deck_fallback_modulate()
+
+	if _floor_visual_root != null:
+		_floor_visual_root.modulate = fallback_tint
+		for child in _floor_visual_root.get_children():
+			var canvas_child := child as CanvasItem
+			if canvas_child != null:
+				canvas_child.material = _deck_palette_material
+
+	if _wall_visual_root != null:
+		_wall_visual_root.modulate = fallback_tint
+		for block in _wall_visual_root.get_children():
+			for child in block.get_children():
+				var canvas_child := child as CanvasItem
+				if canvas_child != null:
+					canvas_child.material = _deck_palette_material
+
+	# Vector overlays do not need the shader. Rebuild them so their hazard and
+	# spawn-pad accent follows the currently selected deck palette as well.
+	if _overlay_visual_root != null and not _walkable.is_empty():
+		_rebuild_overlay_visuals()
 
 func get_deck_palette_name(deck_number: int = -1) -> String:
 	if DECK_PALETTES.is_empty():
@@ -439,38 +616,17 @@ func get_deck_palette_name(deck_number: int = -1) -> String:
 	var palette: Dictionary = DECK_PALETTES[index]
 	return String(palette.get("name", "DECK"))
 
+func get_deck_palette_count() -> int:
+	return DECK_PALETTES.size()
+
 func _build_deck_palette_shader() -> void:
 	_deck_palette_material = ShaderMaterial.new()
 	_deck_palette_material.shader = DECK_PALETTE_SHADER
-	material = _deck_palette_material
 
 func _draw() -> void:
+	# The parent now draws only the void below the deck. Textured floor tiles are
+	# Sprite2D children so the palette shader is guaranteed to receive TEXTURE.
 	draw_rect(deck_bounds.grow(900.0), Color("05070b"))
-
-	for diagonal in range(grid_width + grid_height - 1):
-		for x in range(grid_width):
-			var y := diagonal - x
-			if y < 0 or y >= grid_height:
-				continue
-			if _walkable[x][y]:
-				_draw_floor_cell(Vector2i(x, y))
-
-	# Hazards now use the authored hazard floor PNG. Keep a restrained
-	# one-pixel outline so dangerous cells still read clearly during play.
-	for cell in _hazard_cells:
-		_draw_hazard_outline(cell)
-
-	_draw_spawn_pad()
-
-func _draw_floor_cell(cell: Vector2i) -> void:
-	var center := _cell_center(cell)
-	var style := int(_floor_styles.get(cell, FloorStyle.BASE))
-	var texture := _floor_texture_for_style(style)
-	if texture == null:
-		texture = FLOOR_BASE_TEXTURE
-
-	var texture_size := texture.get_size()
-	draw_texture(texture, (center - texture_size * 0.5).round())
 
 func _floor_texture_for_style(style: int) -> Texture2D:
 	match style:
@@ -486,21 +642,6 @@ func _floor_texture_for_style(style: int) -> Texture2D:
 			return FLOOR_HAZARD_TEXTURE
 		_:
 			return FLOOR_BASE_TEXTURE
-
-func _draw_hazard_outline(cell: Vector2i) -> void:
-	var center := _cell_center(cell)
-	var points := _diamond_points(center, tile_width - 2.0, tile_height - 1.0)
-	draw_polyline(_closed_polygon(points), Color(1.45, 0.56, 0.18, 0.72), 1.0, false)
-
-func _draw_spawn_pad() -> void:
-	var center := _cell_center(_start_cell)
-	var outer := _diamond_points(center, 34.0, 18.0)
-	var inner := _diamond_points(center, 24.0, 12.0)
-	draw_colored_polygon(outer, Color("17353c"))
-	draw_polyline(_closed_polygon(outer), Color("59d4e8"), 2.0, false)
-	draw_polyline(_closed_polygon(inner), Color("2e7f8c"), 1.0, false)
-	draw_line(center + Vector2(-7.0, 0.0), center + Vector2(7.0, 0.0), Color("59d4e8"), 1.0, false)
-	draw_line(center + Vector2(0.0, -4.0), center + Vector2(0.0, 4.0), Color("59d4e8"), 1.0, false)
 
 func _wall_touches_floor(cell: Vector2i) -> bool:
 	for direction in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:

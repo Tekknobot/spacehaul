@@ -19,6 +19,7 @@ static func ensure_actions() -> void:
 	_add_action("respawn")
 	_add_action("regenerate_level")
 	_add_action("toggle_ui")
+	_add_action("cycle_deck_cheat")
 
 	_add_key("move_left", KEY_A)
 	_add_key("move_left", KEY_LEFT)
@@ -72,6 +73,9 @@ static func ensure_actions() -> void:
 
 	_add_key("regenerate_level", KEY_G)
 	_add_joy_button("regenerate_level", JOY_BUTTON_RIGHT_SHOULDER)
+
+	# Runtime deck/palette test. Press P repeatedly to cycle 1 -> 2 -> 3 -> 4 -> 5 -> 1.
+	_add_key("cycle_deck_cheat", KEY_P)
 
 	# Survival HUD is now persistent. Keep the action registered for compatibility,
 	# but TAB is intentionally not required for core run information.

@@ -87,6 +87,16 @@ func _process(delta: float) -> void:
 		_restart_run()
 		return
 
+	# Developer palette/deck test. P performs the real cinematic transfer but
+	# advances immediately, so every runtime palette can be checked without
+	# waiting four minutes. Do not allow it over the level-up chooser or while a
+	# transfer is already active.
+	if Input.is_action_just_pressed("cycle_deck_cheat"):
+		var upgrade_open := _upgrade_overlay != null and _upgrade_overlay.visible
+		if not upgrade_open and not _deck_transition_active and not _game_over and not _run_complete:
+			_start_deck_transition(true)
+			return
+
 	if get_tree().paused or _game_over or _run_complete:
 		_update_hud()
 		return
@@ -238,13 +248,13 @@ func _on_deck_regenerated(_new_spawn: Vector2, new_seed: int) -> void:
 		_show_banner("DECK %d" % _deck_number)
 	_update_hud()
 
-func _start_deck_transition() -> void:
+func _start_deck_transition(cheat_cycle: bool = false) -> void:
 	if _deck_transition_active or _game_over or _run_complete:
 		return
 	var active := mecha_manager.get_active_mecha()
 	if active == null:
-		_deck_number += 1
-		_next_deck_time += DECK_DURATION
+		_deck_number = _next_deck_number(cheat_cycle)
+		_update_next_deck_time_after_transition(cheat_cycle)
 		deck.set_deck_palette(_deck_number)
 		deck.generate_new_level()
 		return
@@ -266,9 +276,12 @@ func _start_deck_transition() -> void:
 		out_tween.tween_property(_top_hud, "modulate:a", 0.18, 0.34)
 	await out_tween.finished
 
-	_deck_number += 1
-	_next_deck_time += DECK_DURATION
+	_deck_number = _next_deck_number(cheat_cycle)
+	_update_next_deck_time_after_transition(cheat_cycle)
 	deck.set_deck_palette(_deck_number)
+	# generate_new_level() performs a second, post-generation runtime bind after
+	# every new wall/floor visual exists, so the selected palette is guaranteed
+	# to be attached to the newly generated deck before the overlay clears.
 	deck.generate_new_level()
 
 	active = mecha_manager.get_active_mecha()
@@ -279,7 +292,7 @@ func _start_deck_transition() -> void:
 
 	_set_deck_transition_overlay_amount(0.92)
 	SFX.play(self, "boost", -14.0, 1.12)
-	_show_banner("DECK %d   //   %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)], 0.95)
+	_show_banner("DECK %d   %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)], 0.95)
 
 	var in_tween := create_tween()
 	in_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
@@ -300,6 +313,20 @@ func _start_deck_transition() -> void:
 	enemy_manager.set_spawning_enabled(true)
 	_deck_transition_active = false
 	_update_hud()
+
+func _next_deck_number(cheat_cycle: bool) -> int:
+	if not cheat_cycle:
+		return _deck_number + 1
+	var palette_count := maxi(1, deck.get_deck_palette_count())
+	return (_deck_number % palette_count) + 1
+
+func _update_next_deck_time_after_transition(cheat_cycle: bool) -> void:
+	if cheat_cycle:
+		# Give the player a full four minutes from the cheat-selected deck instead
+		# of immediately tripping the scheduled transition afterwards.
+		_next_deck_time = _run_time + DECK_DURATION
+	else:
+		_next_deck_time += DECK_DURATION
 
 func _build_deck_transition_overlay() -> void:
 	_deck_transition_overlay = ColorRect.new()
@@ -348,20 +375,20 @@ func _update_hud() -> void:
 	var active := mecha_manager.get_active_mecha()
 	if active == null:
 		_hud_mecha.text = "NO MECHA"
-		_hud_hull.text = "HULL --"
+		_hud_hull.text = "HULL NA"
 		_hud_level.text = "LV %02d" % _level
-		_hud_salvage.text = "SALV %02d/%02d" % [_salvage, _salvage_required]
+		_hud_salvage.text = "SALV %02d OF %02d" % [_salvage, _salvage_required]
 		_hud_time.text = _format_time(_run_time)
-		_hud_deck.text = "DECK %d" % _deck_number
+		_hud_deck.text = "DECK %d  %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)]
 		_hud_hostiles.text = "FOES %02d" % enemy_manager.get_alive_count()
 		return
 
 	_hud_mecha.text = mecha_manager.get_active_mecha_name()
-	_hud_hull.text = "HULL %03d/%03d" % [active.get_hull(), active.get_max_hull()]
+	_hud_hull.text = "HULL %03d OF %03d" % [active.get_hull(), active.get_max_hull()]
 	_hud_level.text = "LV %02d" % _level
-	_hud_salvage.text = "SALV %02d/%02d" % [_salvage, _salvage_required]
+	_hud_salvage.text = "SALV %02d OF %02d" % [_salvage, _salvage_required]
 	_hud_time.text = _format_time(_run_time)
-	_hud_deck.text = "DECK %d" % _deck_number
+	_hud_deck.text = "DECK %d  %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)]
 	_hud_hostiles.text = "FOES %02d" % enemy_manager.get_alive_count()
 
 	var hull_ratio := float(active.get_hull()) / float(maxi(1, active.get_max_hull()))
@@ -374,7 +401,7 @@ func _update_hud() -> void:
 
 func _format_time(seconds: float) -> String:
 	var total := maxi(0, int(floor(seconds)))
-	return "%02d:%02d" % [int(total / 60), total % 60]
+	return "%02d %02d" % [int(total / 60), total % 60]
 
 func _hide_legacy_hud() -> void:
 	# Keep the old scene nodes as harmless placeholders so existing scene UIDs stay
@@ -560,7 +587,7 @@ func _build_run_summary_overlay() -> void:
 	box.add_child(_run_summary_text)
 
 	var hint := Label.new()
-	hint.text = "G / RB   NEW RUN"
+	hint.text = "G RB   NEW RUN"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
 	hint.add_theme_font_size_override("font_size", 16)
@@ -676,16 +703,16 @@ func _present_upgrade_choices() -> void:
 		return
 
 	var generic_pool: Array[Dictionary] = [
-		{"id": "primary", "label": "PRIMARY COOLING   -15% PRIMARY COOLDOWN"},
-		{"id": "impact", "label": "IMPACT AMPLIFIER   +18% IMPACT RADIUS"},
-		{"id": "hull", "label": "HULL PLATING   +20 MAX HULL AND REPAIR"},
-		{"id": "servo", "label": "SERVO BOOST   +8% MOVE SPEED"},
-		{"id": "magnet", "label": "SALVAGE MAGNET   +20% PICKUP RANGE"},
+		{"id": "primary", "label": "PRIMARY COOLING   REDUCE PRIMARY COOLDOWN 15"},
+		{"id": "impact", "label": "IMPACT AMPLIFIER   INCREASE IMPACT RADIUS 18"},
+		{"id": "hull", "label": "HULL PLATING   ADD 20 MAX HULL AND REPAIR"},
+		{"id": "servo", "label": "SERVO BOOST   INCREASE MOVE SPEED 8"},
+		{"id": "magnet", "label": "SALVAGE MAGNET   INCREASE PICKUP RANGE 20"},
 	]
 	if active.get_hull() < active.get_max_hull():
 		generic_pool.append({"id": "repair", "label": "FIELD REPAIR   RESTORE 30 HULL"})
 	if active.is_secondary_unlocked():
-		generic_pool.append({"id": "secondary", "label": "SECONDARY COOLING   -15% SECONDARY COOLDOWN"})
+		generic_pool.append({"id": "secondary", "label": "SECONDARY COOLING   REDUCE SECONDARY COOLDOWN 15"})
 
 	var ability_pool: Array[Dictionary] = []
 	if active.can_upgrade_primary_ability():
