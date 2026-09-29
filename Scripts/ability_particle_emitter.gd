@@ -1,6 +1,8 @@
 extends Node2D
 class_name SpacehaulAbilityParticles
 
+const IsoVfx = preload("res://Scripts/isometric_vfx.gd")
+
 const PIXEL_SIZE := 2.0
 const MAX_PARTICLES := 96
 
@@ -108,7 +110,7 @@ func setup_path(
 		)
 
 		var tangent := (b - a).normalized()
-		var normal := Vector2(-tangent.y, tangent.x)
+		var normal := IsoVfx.ground_perpendicular(tangent)
 		var position := a.lerp(b, t).round()
 		var velocity := _path_velocity(tangent, normal)
 
@@ -146,10 +148,7 @@ func setup_burst(
 			+ _rng.randf_range(-0.22, 0.22)
 		)
 
-		var dir := Vector2(
-			cos(angle),
-			sin(angle)
-		)
+		var dir := IsoVfx.ground_offset(angle, 1.0)
 
 		var velocity := (
 			dir
@@ -221,11 +220,16 @@ func _emit_follow_particle(at: Vector2) -> void:
 	var tangent := _last_motion.normalized()
 	if tangent.length_squared() <= 0.001:
 		tangent = Vector2.RIGHT
-	var normal := Vector2(-tangent.y, tangent.x)
-	var backward := -tangent
-	var velocity := backward * _rng.randf_range(14.0, 34.0) + normal * _rng.randf_range(-12.0, 12.0)
+	var backward := IsoVfx.ground_vector(tangent, -1.0)
+	var velocity := (
+		IsoVfx.ground_vector(tangent, -_rng.randf_range(14.0, 34.0))
+		+ IsoVfx.ground_perpendicular_offset(tangent, _rng.randf_range(-12.0, 12.0))
+	)
 	velocity = _profile_velocity(velocity, backward)
-	var offset := normal * _rng.randf_range(-2.0, 2.0) + backward * _rng.randf_range(0.0, 3.0)
+	var offset := (
+		IsoVfx.ground_perpendicular_offset(tangent, _rng.randf_range(-2.0, 2.0))
+		+ IsoVfx.ground_vector(tangent, -_rng.randf_range(0.0, 3.0))
+	)
 	_add_particle((at + offset).round(), velocity, _profile_life(), _particles.size())
 
 func _add_particle(position: Vector2, velocity: Vector2, life: float, index: int) -> void:
@@ -270,9 +274,14 @@ func _profile_life() -> float:
 		_:
 			return _rng.randf_range(1.0, 1.5)
 
-func _path_velocity(tangent: Vector2, normal: Vector2) -> Vector2:
-	var velocity := normal * _rng.randf_range(-16.0, 16.0) - tangent * _rng.randf_range(2.0, 14.0)
-	return _profile_velocity(velocity, normal)
+func _path_velocity(tangent: Vector2, _normal: Vector2) -> Vector2:
+	var lateral := _rng.randf_range(-16.0, 16.0)
+	var backward := _rng.randf_range(2.0, 14.0)
+	var velocity := (
+		IsoVfx.ground_perpendicular_offset(tangent, lateral)
+		+ IsoVfx.ground_vector(tangent, -backward)
+	)
+	return _profile_velocity(velocity, IsoVfx.ground_perpendicular(tangent))
 
 func _profile_velocity(base: Vector2, radial_dir: Vector2) -> Vector2:
 	match _profile:
@@ -314,8 +323,8 @@ func _apply_profile_motion(p: Dictionary, delta: float) -> void:
 		"gravity":
 			var anchor := Vector2(p["anchor"])
 			var to_center := (anchor - position).normalized()
-			velocity += to_center * 22.0 * delta
-			velocity = velocity.rotated(1.2 * delta)
+			velocity += IsoVfx.ground_vector(to_center, 22.0 * delta)
+			velocity = IsoVfx.rotate_ground_vector(velocity, 1.2 * delta)
 		"phase":
 			position.x += sin(phase + age * 18.0) * 4.0 * delta
 		"prism":

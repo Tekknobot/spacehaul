@@ -2,6 +2,7 @@ extends Node2D
 class_name SpacehaulSpecialExplosion
 
 const SFX = preload("res://Scripts/sound_fx.gd")
+const IsoVfx = preload("res://Scripts/isometric_vfx.gd")
 
 const EXPLOSION_FRAME_COUNT := 14
 const EXPLOSION_FPS := 18.0
@@ -104,8 +105,12 @@ func _draw() -> void:
 	for i in range(20):
 		var angle := TAU * (float(i) / 20.0) + (_rand01(i) - 0.5) * 0.35
 		var distance := radius * expand * lerpf(0.38, 1.0, _rand01(40 + i))
-		_pixel(Vector2(cos(angle), sin(angle)) * distance, core_color, fade * lerpf(0.45, 1.0, _rand01(80 + i)))
+		var ground_pos := IsoVfx.ground_offset(angle, distance)
+		# A little vertical lift keeps the blast volumetric while the footprint stays
+		# locked to the same 2:1 plane as the deck.
+		var lift := sin(progress * PI) * radius * lerpf(0.02, 0.18, _rand01(120 + i))
+		_pixel(ground_pos + Vector2(0.0, -lift), core_color, fade * lerpf(0.45, 1.0, _rand01(80 + i)))
 	for i in range(8):
 		var angle2 := TAU * (float(i) / 8.0)
-		var pos2 := Vector2(cos(angle2), sin(angle2)) * radius * 0.55 * expand
+		var pos2 := IsoVfx.ground_offset(angle2, radius * 0.55 * expand)
 		_pixel(pos2, Color(core_color.r * 1.15, core_color.g * 1.15, core_color.b * 1.15, 1.0), fade)

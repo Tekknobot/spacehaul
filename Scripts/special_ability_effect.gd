@@ -4,6 +4,7 @@ class_name SpacehaulSpecialAbility
 const ExplosionScript = preload("res://Scripts/special_explosion.gd")
 const ProjectileFxScript = preload("res://Scripts/special_projectile.gd")
 const AbilityParticleScript = preload("res://Scripts/ability_particle_emitter.gd")
+const IsoVfx = preload("res://Scripts/isometric_vfx.gd")
 
 # All generated VFX are authored in world pixels: 1x1 core pixels with a 2x2
 # additive bloom. Because the project uses nearest filtering and canvas stretch,
@@ -14,6 +15,7 @@ const BLOOM_PIXEL := 2.0
 var mecha_id := "M1"
 var origin := Vector2.ZERO
 var owner_center := Vector2.ZERO
+var owner_ground := Vector2.ZERO
 var target := Vector2.ZERO
 var direction := Vector2.RIGHT
 var shooter_rid: RID
@@ -28,6 +30,7 @@ func setup(
 	new_mecha_id: String,
 	start_position: Vector2,
 	new_owner_center: Vector2,
+	new_owner_ground: Vector2,
 	target_position: Vector2,
 	source_rid: RID,
 	use_alternate: bool = false,
@@ -38,6 +41,7 @@ func setup(
 	mecha_id = new_mecha_id
 	origin = start_position.round()
 	owner_center = new_owner_center.round()
+	owner_ground = new_owner_ground.round()
 	target = target_position.round()
 	shooter_rid = source_rid
 	alternate = use_alternate
@@ -229,13 +233,31 @@ func _fade_free(node: Node2D, seconds: float = 0.12) -> void:
 	tween.tween_property(node, "modulate:a", 0.0, seconds)
 	tween.tween_callback(node.queue_free)
 
+func _make_arc_ground_shadow(at: Vector2) -> Polygon2D:
+	var shadow := Polygon2D.new()
+	shadow.polygon = PackedVector2Array([
+		Vector2(0.0, -1.0),
+		Vector2(2.0, 0.0),
+		Vector2(0.0, 1.0),
+		Vector2(-2.0, 0.0),
+	])
+	shadow.color = Color(0.02, 0.025, 0.035, 0.42)
+	shadow.global_position = at.round()
+	shadow.z_as_relative = false
+	shadow.z_index = clampi(int(round(at.y)) + 2, -3000, 3000)
+	root.add_child(shadow)
+	return shadow
+
 func _pulse_ring(center: Vector2, radius: float, core: Color, glow: Color, life: float = 0.16, point_count: int = 32, phase: float = 0.0) -> Node2D:
 	var points := PackedVector2Array()
 	var count := maxi(8, point_count)
 	for i in range(count + 1):
 		var angle := phase + TAU * float(i) / float(count)
-		points.append((center + Vector2(cos(angle), sin(angle)) * radius).round())
+		points.append(IsoVfx.ground_point(center, angle, radius).round())
 	var ring := _polyline(points, core, glow)
+	# Ground rings participate in the deck's Y-depth instead of always rendering
+	# above every wall. Foreground geometry can now naturally cross in front.
+	ring.z_index = clampi(int(round(center.y)) + 4, -3000, 3000)
 	_fade_free(ring, life)
 	return ring
 
@@ -246,7 +268,7 @@ func _spark_pixels(at: Vector2, core: Color, glow: Color, count: int, travel_rad
 		pixel.setup(at, core, glow, 1.0, true)
 		var angle := TAU * float(i) / float(maxi(1, count)) + _rng.randf_range(-0.16, 0.16)
 		var distance := travel_radius * _rng.randf_range(0.55, 1.0)
-		var destination := (at + Vector2(cos(angle), sin(angle)) * distance).round()
+		var destination := (at + IsoVfx.ground_offset(angle, distance)).round()
 		var tween := root.create_tween()
 		tween.set_parallel(true)
 		tween.tween_property(pixel, "global_position", destination, life)
@@ -272,7 +294,7 @@ func _explode(at: Vector2, core: Color = Color(3.0, 1.5, 0.45, 1.0), glow: Color
 	root.add_child(fx)
 	fx.setup(at.round(), core, glow, radius * impact_scale)
 	_spawn_impact_particles(at, core, glow, radius * impact_scale)
-	_damage_radius(at, hit_radius * impact_scale, (at - owner_center).normalized())
+	_damage_radius(at, hit_radius * impact_scale, (at - owner_ground).normalized())
 
 func _damage_radius(at: Vector2, radius: float, push_dir: Vector2) -> void:
 	if get_world_2d() == null:
@@ -287,8 +309,12 @@ func _damage_radius(at: Vector2, radius: float, push_dir: Vector2) -> void:
 	query.collide_with_areas = true
 	for hit in get_world_2d().direct_space_state.intersect_shape(query, 96):
 		var collider := hit.get("collider") as Object
-		if collider != null and collider.has_method("take_projectile_hit"):
-			collider.call("take_projectile_hit", push_dir)
+		if collider == null or not collider.has_method("take_projectile_hit"):
+			continue
+		var body := collider as Node2D
+		if body != null and not IsoVfx.inside_ground_radius(at, body.global_position, radius):
+			continue
+		collider.call("take_projectile_hit", push_dir)
 
 func _radial_hit(at: Vector2, radius: float, outward: bool = true) -> void:
 	if get_world_2d() == null:
@@ -306,6 +332,8 @@ func _radial_hit(at: Vector2, radius: float, outward: bool = true) -> void:
 		if collider == null or not collider.has_method("take_projectile_hit"):
 			continue
 		var body := collider as Node2D
+		if body != null and not IsoVfx.inside_ground_radius(at, body.global_position, radius):
+			continue
 		var push := Vector2.RIGHT
 		if body != null:
 			push = body.global_position - at
@@ -369,6 +397,7 @@ func _arc_shot_from(
 	root.add_child(projectile)
 	projectile.setup(start.round(), core, glow, 1.0)
 	_spawn_follow_particles(projectile, core, glow, travel_time + 0.08, 64.0)
+	var ground_shadow := _make_arc_ground_shadow(start)
 
 	var trail_container := Node2D.new()
 	trail_container.z_as_relative = false
@@ -424,6 +453,14 @@ func _arc_shot_from(
 		if is_instance_valid(projectile):
 			projectile.global_position = p
 
+		if is_instance_valid(ground_shadow):
+			var ground_p := start.lerp(live_dest, t).round()
+			var height_factor := sin(t * PI)
+			ground_shadow.global_position = ground_p
+			ground_shadow.z_index = clampi(int(round(ground_p.y)) + 2, -3000, 3000)
+			ground_shadow.scale = Vector2.ONE * lerpf(1.0, 0.62, height_factor)
+			ground_shadow.modulate.a = lerpf(0.82, 0.38, height_factor)
+
 		trail_glow.add_point(p)
 		trail_core.add_point(p)
 
@@ -433,6 +470,8 @@ func _arc_shot_from(
 
 	if is_instance_valid(projectile):
 		projectile.queue_free()
+	if is_instance_valid(ground_shadow):
+		ground_shadow.queue_free()
 
 	if is_instance_valid(trail_container):
 		_fade_free(trail_container, 0.14)
@@ -478,12 +517,11 @@ func _nearest_unused_enemy(
 		if collision_body != null and collision_body.collision_layer == 0:
 			continue
 
-		if owner_center.distance_to(enemy.global_position) > max_owner_range:
+		if IsoVfx.ground_distance(owner_ground, enemy.global_position) > max_owner_range:
 			continue
 
-		var distance_sq := aim_point.distance_squared_to(
-			enemy.global_position
-		)
+		var distance := IsoVfx.ground_distance(aim_point, enemy.global_position)
+		var distance_sq := distance * distance
 
 		if distance_sq <= best_distance_sq:
 			best_distance_sq = distance_sq
@@ -507,32 +545,34 @@ func _show_target_lock(at: Vector2, core: Color, glow: Color) -> void:
 	# A tiny 1px reticle confirms that an arcing weapon acquired the enemy nearest
 	# the cursor. It uses the same 1px core / 2px bloom language as every other FX.
 	_pulse_ring(at.round(), 8.0, core, Color(glow.r, glow.g, glow.b, 0.22), 0.11, 12)
-	var arms := [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]
-	for arm in arms:
-		var a = at + arm * 7.0
-		var b = at + arm * 11.0
+	for i in range(4):
+		var angle := float(i) * PI * 0.5
+		var a := IsoVfx.ground_point(at, angle, 7.0)
+		var b := IsoVfx.ground_point(at, angle, 11.0)
 		var mark := _line(a, b, core, Color(glow.r, glow.g, glow.b, 0.18))
 		_fade_free(mark, 0.11)
 
 func _target_clamped(max_range: float) -> Vector2:
-	var delta := target - origin
-	if delta.length() > max_range:
-		return (origin + delta.normalized() * max_range).round()
+	var ground_delta := IsoVfx.unproject_ground(target - origin)
+	if ground_delta.length() > max_range:
+		return (origin + IsoVfx.project_ground(ground_delta.normalized() * max_range)).round()
 	return target.round()
 
 func _arc_points(center_point: Vector2, aim_angle: float, radius: float, half_angle: float, count: int) -> PackedVector2Array:
 	var points := PackedVector2Array()
 	var safe_count := maxi(3, count)
+	var screen_aim := Vector2(cos(aim_angle), sin(aim_angle))
+	var ground_aim_angle := IsoVfx.unproject_ground(screen_aim).angle()
 	for i in range(safe_count):
 		var t := float(i) / float(safe_count - 1)
-		var angle := aim_angle + lerpf(-half_angle, half_angle, t)
-		points.append((center_point + Vector2(cos(angle), sin(angle)) * radius).round())
+		var angle := ground_aim_angle + lerpf(-half_angle, half_angle, t)
+		points.append(IsoVfx.ground_point(center_point, angle, radius).round())
 	return points
 
 func _jagged_segment_points(from: Vector2, to: Vector2, jitter: float = 4.0) -> PackedVector2Array:
 	var points := PackedVector2Array()
 	var delta := to - from
-	var normal := Vector2(-delta.y, delta.x).normalized()
+	var normal := IsoVfx.ground_perpendicular(delta)
 	points.append(from.round())
 	for i in range(1, 4):
 		var t := float(i) / 4.0
@@ -556,12 +596,12 @@ func _chain_enemy_points(max_hops: int, first_range: float, jump_range: float) -
 			if body == null:
 				continue
 			var range_limit := first_range if hop == 0 else jump_range
-			var distance := cursor.distance_to(body.global_position)
+			var distance := IsoVfx.ground_distance(cursor, body.global_position)
 			if distance > range_limit:
 				continue
 			var score := distance
 			if hop == 0:
-				score += body.global_position.distance_to(target) * 0.45
+				score += IsoVfx.ground_distance(body.global_position, target) * 0.45
 			if score < best_score:
 				best_score = score
 				best = body
@@ -586,7 +626,7 @@ func _m1_plasma_cleaver() -> void:
 		if i == 0 or i == int(arc.size() / 2) or i == arc.size() - 1:
 			_explode(arc[i], Color(3.0, 1.5, 0.55, 1.0), Color(1.5, 0.40, 0.08, 1.0), 10.0 + float(tier), 9.0 + float(tier))
 	_fade_free(blade, 0.16)
-	_spark_pixels(owner_center + direction * radius * 0.65, Color(3.0, 1.8, 0.75, 1.0), Color(1.5, 0.45, 0.1, 1.0), 5 + tier * 2, 18.0)
+	_spark_pixels(owner_center + IsoVfx.ground_vector(direction, radius * 0.65), Color(3.0, 1.8, 0.75, 1.0), Color(1.5, 0.45, 0.1, 1.0), 5 + tier * 2, 18.0)
 	if tier >= 2:
 		await _sleep(0.07)
 		var outer := _arc_points(owner_center, direction.angle(), radius + 15.0, half_angle * 0.88, teeth)
@@ -609,14 +649,14 @@ func _m1_repulsor_burst() -> void:
 	var spokes := 12 + tier * 4
 	for wave in range(waves):
 		var radius := 64.0 + float(tier) * 10.0 + float(wave) * 22.0
-		_pulse_ring(owner_center, radius, Color(1.2, 2.9, 3.2, 1.0), Color(0.2, 1.0, 1.6, 0.26), 0.20, spokes)
-		_radial_hit(owner_center, radius, true)
+		_pulse_ring(owner_ground, radius, Color(1.2, 2.9, 3.2, 1.0), Color(0.2, 1.0, 1.6, 0.26), 0.20, spokes)
+		_radial_hit(owner_ground, radius, true)
 		for i in range(spokes):
 			if i % 2 != 0:
 				continue
 			var angle := TAU * float(i) / float(spokes)
-			var end := owner_center + Vector2(cos(angle), sin(angle)) * radius
-			var ray := _line(owner_center, end, Color(1.5, 3.1, 3.3, 0.9), Color(0.25, 1.0, 1.5, 0.18))
+			var end := IsoVfx.ground_point(owner_ground, angle, radius)
+			var ray := _line(owner_ground, end, Color(1.5, 3.1, 3.3, 0.9), Color(0.25, 1.0, 1.5, 0.18))
 			_fade_free(ray, 0.10)
 			_explode(end, Color(1.8, 3.0, 3.2, 1.0), Color(0.25, 1.0, 1.5, 1.0), 9.0, 10.0)
 		await _sleep(0.08)
@@ -629,8 +669,8 @@ func _m2_vector_harpoons() -> void:
 	var reach := 158.0 + float(tier) * 12.0
 	for i in range(bolt_count):
 		var f := 0.0 if bolt_count == 1 else (float(i) / float(bolt_count - 1) - 0.5)
-		var bolt_dir := direction.rotated(f * total_spread)
-		var end := (origin + bolt_dir * reach).round()
+		var bolt_offset := IsoVfx.ground_vector(direction, reach, f * total_spread)
+		var end := (origin + bolt_offset).round()
 		var tether := _line(origin, end, Color(0.9, 2.8, 3.2, 1.0), Color(0.15, 0.95, 1.45, 0.28))
 		_damage_line(origin, end, 4.0 + float(tier))
 		_explode(end, Color(1.2, 2.9, 3.2, 1.0), Color(0.2, 0.95, 1.4, 1.0), 9.0 + float(tier), 10.0 + float(tier))
@@ -644,15 +684,15 @@ func _m2_anchor_bloom() -> void:
 	var collapse_count := 3 + (1 if tier >= 2 else 0)
 	for i in range(collapse_count):
 		var r := lerpf(radius, 24.0, float(i) / float(maxi(1, collapse_count - 1)))
-		_pulse_ring(owner_center, r, Color(0.8, 2.7, 3.2, 1.0), Color(0.15, 0.8, 1.4, 0.25), 0.12, 28, float(i) * 0.12)
+		_pulse_ring(owner_ground, r, Color(0.8, 2.7, 3.2, 1.0), Color(0.15, 0.8, 1.4, 0.25), 0.12, 28, float(i) * 0.12)
 		await _sleep(0.045)
-	_radial_hit(owner_center, radius, false)
+	_radial_hit(owner_ground, radius, false)
 	await _sleep(0.08)
-	_explode(owner_center, Color(1.3, 3.0, 3.25, 1.0), Color(0.2, 1.0, 1.5, 1.0), 22.0 + float(tier) * 3.0, 26.0 + float(tier) * 5.0)
-	_radial_hit(owner_center, radius * 0.78, true)
+	_explode(owner_ground, Color(1.3, 3.0, 3.25, 1.0), Color(0.2, 1.0, 1.5, 1.0), 22.0 + float(tier) * 3.0, 26.0 + float(tier) * 5.0)
+	_radial_hit(owner_ground, radius * 0.78, true)
 	if tier >= 3:
-		_pulse_ring(owner_center, radius + 18.0, Color(1.7, 3.1, 3.3, 1.0), Color(0.25, 1.0, 1.5, 0.24), 0.18, 36)
-		_radial_hit(owner_center, radius + 18.0, true)
+		_pulse_ring(owner_ground, radius + 18.0, Color(1.7, 3.1, 3.3, 1.0), Color(0.25, 1.0, 1.5, 0.24), 0.18, 36)
+		_radial_hit(owner_ground, radius + 18.0, true)
 
 # M3 PRIMARY: COMET MORTAR
 func _m3_comet_mortar() -> void:
@@ -717,7 +757,7 @@ func _m3_comet_mortar() -> void:
 			var angle := TAU * float(i) / float(maxi(1, shards))
 			end = (
 				dest
-				+ Vector2(cos(angle), sin(angle)) * shard_radius
+				+ IsoVfx.ground_offset(angle, shard_radius)
 			).round()
 
 		var shrapnel := _line(
@@ -791,9 +831,8 @@ func _nearest_unused_enemy_from_point(
 		if collision_body != null and collision_body.collision_layer == 0:
 			continue
 
-		var distance_sq := search_center.distance_squared_to(
-			enemy.global_position
-		)
+		var distance := IsoVfx.ground_distance(search_center, enemy.global_position)
+		var distance_sq := distance * distance
 
 		if distance_sq <= best_distance_sq:
 			best_distance_sq = distance_sq
@@ -806,10 +845,10 @@ func _m3_orbital_rain() -> void:
 	var tier := secondary_tier
 	var strikes := 8 + tier * 4
 	var radius := 72.0 + float(tier) * 10.0
-	_explode(owner_center, Color(2.8, 1.2, 0.3, 1.0), Color(1.4, 0.3, 0.08, 1.0), 13.0, 13.0)
+	_explode(owner_ground, Color(2.8, 1.2, 0.3, 1.0), Color(1.4, 0.3, 0.08, 1.0), 13.0, 13.0)
 	for i in range(strikes):
 		var angle := TAU * float(i) / float(strikes) + float(tier) * 0.13
-		var hit := (owner_center + Vector2(cos(angle), sin(angle)) * radius).round()
+		var hit := (IsoVfx.ground_point(owner_ground, angle, radius)).round()
 		var sky_start := hit + Vector2(float((i % 3) - 1) * 18.0, -140.0)
 		var beam := _line(sky_start, hit, Color(3.0, 1.35, 0.35, 1.0), Color(1.5, 0.35, 0.08, 0.24))
 		_explode(hit, Color(3.0, 1.2, 0.3, 1.0), Color(1.5, 0.3, 0.08, 1.0), 11.0 + float(tier), 12.0 + float(tier))
@@ -821,18 +860,19 @@ func _r1_prism_lance() -> void:
 	var tier := primary_tier
 	var lance_count := 3 + tier
 	var reach := 184.0 + float(tier) * 14.0
-	var perp := Vector2(-direction.y, direction.x)
 	for i in range(lance_count):
 		var offset := (float(i) - float(lance_count - 1) * 0.5) * 5.0
-		var start := origin + perp * offset
-		var end := (start + direction * reach).round()
+		var lateral := IsoVfx.ground_perpendicular_offset(direction, offset)
+		var start := origin + lateral
+		var end := (start + IsoVfx.ground_vector(direction, reach)).round()
 		var beam := _line(start, end, Color(0.85, 2.8, 3.25, 1.0), Color(0.18, 0.9, 1.5, 0.25))
 		_damage_line(start, end, 3.5 + float(tier) * 0.5)
 		_explode(end, Color(1.1, 2.9, 3.3, 1.0), Color(0.2, 0.9, 1.5, 1.0), 8.0 + float(tier), 8.0 + float(tier))
 		_fade_free(beam, 0.13)
 		if tier >= 3:
-			var cross := _line(end - perp * 9.0, end + perp * 9.0, Color(1.8, 3.1, 3.4, 0.9), Color(0.2, 0.9, 1.5, 0.20))
-			_damage_line(end - perp * 9.0, end + perp * 9.0, 4.0)
+			var cross_offset := IsoVfx.ground_perpendicular_offset(direction, 9.0)
+			var cross := _line(end - cross_offset, end + cross_offset, Color(1.8, 3.1, 3.4, 0.9), Color(0.2, 0.9, 1.5, 0.20))
+			_damage_line(end - cross_offset, end + cross_offset, 4.0)
 			_fade_free(cross, 0.10)
 
 # R1 SECONDARY: HALO SWEEP
@@ -843,12 +883,12 @@ func _r1_halo_sweep() -> void:
 	var radius := 76.0 + float(tier) * 10.0
 	for phase_index in range(phases):
 		var phase := float(phase_index) * PI / float(maxi(1, spokes))
-		_pulse_ring(owner_center, radius, Color(0.9, 2.8, 3.25, 1.0), Color(0.18, 0.9, 1.5, 0.22), 0.18, spokes, phase)
+		_pulse_ring(owner_ground, radius, Color(0.9, 2.8, 3.25, 1.0), Color(0.18, 0.9, 1.5, 0.22), 0.18, spokes, phase)
 		for i in range(spokes):
 			var angle := phase + TAU * float(i) / float(spokes)
-			var end := (owner_center + Vector2(cos(angle), sin(angle)) * radius).round()
-			var beam := _line(owner_center, end, Color(1.2, 3.0, 3.3, 0.9), Color(0.2, 0.9, 1.5, 0.16))
-			_damage_line(owner_center, end, 3.0)
+			var end := (IsoVfx.ground_point(owner_ground, angle, radius)).round()
+			var beam := _line(owner_ground, end, Color(1.2, 3.0, 3.3, 0.9), Color(0.2, 0.9, 1.5, 0.16))
+			_damage_line(owner_ground, end, 3.0)
 			if i % 2 == 0:
 				_explode(end, Color(1.1, 2.9, 3.3, 1.0), Color(0.2, 0.9, 1.5, 1.0), 8.0, 8.0)
 			_fade_free(beam, 0.10)
@@ -867,8 +907,9 @@ func _r2_breach_cannon() -> void:
 	_fade_free(slug, 0.18)
 	var splinters := 4 + tier * 2
 	for i in range(splinters):
-		var angle := direction.angle() + PI + lerpf(-0.75, 0.75, float(i) / float(maxi(1, splinters - 1)))
-		var splinter_end := end + Vector2(cos(angle), sin(angle)) * (28.0 + float(tier) * 4.0)
+		var spread_angle := lerpf(-0.75, 0.75, float(i) / float(maxi(1, splinters - 1)))
+		var splinter_offset := IsoVfx.ground_vector(-direction, 28.0 + float(tier) * 4.0, spread_angle)
+		var splinter_end := end + splinter_offset
 		var splinter := _line(end, splinter_end, Color(3.0, 1.55, 0.45, 0.9), Color(1.5, 0.4, 0.08, 0.18))
 		_damage_line(end, splinter_end, 3.0)
 		_fade_free(splinter, 0.11)
@@ -878,12 +919,12 @@ func _r2_countershock() -> void:
 	var tier := secondary_tier
 	var blasts := 4 + tier * 2
 	var radius := 82.0 + float(tier) * 11.0
-	_radial_hit(owner_center, 42.0 + float(tier) * 6.0, true)
+	_radial_hit(owner_ground, 42.0 + float(tier) * 6.0, true)
 	for i in range(blasts):
 		var angle := TAU * float(i) / float(blasts)
-		var end := (owner_center + Vector2(cos(angle), sin(angle)) * radius).round()
-		var beam := _line(owner_center, end, Color(3.0, 1.75, 0.55, 1.0), Color(1.5, 0.45, 0.08, 0.24))
-		_damage_line(owner_center, end, 5.0)
+		var end := (IsoVfx.ground_point(owner_ground, angle, radius)).round()
+		var beam := _line(owner_ground, end, Color(3.0, 1.75, 0.55, 1.0), Color(1.5, 0.45, 0.08, 0.24))
+		_damage_line(owner_ground, end, 5.0)
 		_explode(end, Color(3.0, 1.45, 0.4, 1.0), Color(1.5, 0.35, 0.08, 1.0), 13.0 + float(tier), 14.0 + float(tier))
 		_fade_free(beam, 0.15)
 	await _sleep(0.05)
@@ -960,7 +1001,7 @@ func _r3_swarm_rack() -> void:
 			var offset_radius := 0.0 if i == 0 else 6.0 + float(tier) * 2.0 + float(i % 2) * 4.0
 			dest = (
 				primary_target_position
-				+ Vector2(cos(angle), sin(angle)) * offset_radius
+				+ IsoVfx.ground_offset(angle, offset_radius)
 			).round()
 
 		await _arc_shot_from(
@@ -983,10 +1024,10 @@ func _r3_flak_dome() -> void:
 	var radius := 72.0 + float(tier) * 10.0
 	for i in range(missile_count):
 		var angle := TAU * float(i) / float(missile_count)
-		var dest := owner_center + Vector2(cos(angle), sin(angle)) * radius
+		var dest := IsoVfx.ground_point(owner_ground, angle, radius)
 		await _arc_shot_from(owner_center, dest, 44.0 + float(tier) * 7.0, 0.16, Color(1.6, 2.85, 3.3, 1.0), Color(0.2, 0.85, 1.55, 1.0), 10.0 + float(tier))
 		await _sleep(0.012)
-	_pulse_ring(owner_center, radius, Color(1.3, 2.8, 3.25, 1.0), Color(0.2, 0.8, 1.5, 0.22), 0.18, missile_count * 2)
+	_pulse_ring(owner_ground, radius, Color(1.3, 2.8, 3.25, 1.0), Color(0.2, 0.8, 1.5, 0.22), 0.18, missile_count * 2)
 
 # R4 PRIMARY: ARC CASCADE
 func _r4_arc_cascade() -> void:
@@ -1019,9 +1060,10 @@ func _r4_emp_crown() -> void:
 		for i in range(point_count + 1):
 			var angle := TAU * float(i) / float(point_count)
 			var jitter := _rng.randf_range(-3.0, 3.0)
-			ring_points.append((owner_center + Vector2(cos(angle), sin(angle)) * (radius + jitter)).round())
+			ring_points.append(IsoVfx.ground_point(owner_ground, angle, radius + jitter).round())
 		var ring := _polyline(ring_points, Color(2.6, 1.5, 3.35, 1.0), Color(1.0, 0.25, 1.7, 0.28))
-		_radial_hit(owner_center, radius + 8.0, true)
+		ring.z_index = clampi(int(round(owner_ground.y)) + 4, -3000, 3000)
+		_radial_hit(owner_ground, radius + 8.0, true)
 		for i in range(0, point_count, 4):
 			_explode(ring_points[i], Color(2.5, 1.3, 3.2, 1.0), Color(1.0, 0.25, 1.7, 1.0), 8.0, 8.0)
 		_fade_free(ring, 0.16)
@@ -1032,11 +1074,11 @@ func _s1_photon_rake() -> void:
 	var tier := primary_tier
 	var beam_count := 3 + tier * 2
 	var reach := 206.0 + float(tier) * 14.0
-	var perp := Vector2(-direction.y, direction.x)
 	for i in range(beam_count):
 		var offset := (float(i) - float(beam_count - 1) * 0.5) * 6.0
-		var start := origin + perp * offset
-		var end := (start + direction * reach).round()
+		var lateral := IsoVfx.ground_perpendicular_offset(direction, offset)
+		var start := origin + lateral
+		var end := (start + IsoVfx.ground_vector(direction, reach)).round()
 		var beam := _line(start, end, Color(3.0, 0.72, 0.52, 1.0), Color(1.5, 0.22, 0.12, 0.28))
 		_damage_line(start, end, 4.0)
 		_explode(end, Color(3.0, 0.82, 0.42, 1.0), Color(1.5, 0.22, 0.10, 1.0), 9.0 + float(tier), 9.0 + float(tier))
@@ -1047,12 +1089,12 @@ func _s1_solar_flare() -> void:
 	var tier := secondary_tier
 	var beam_count := 8 + tier * 4
 	var radius := 78.0 + float(tier) * 11.0
-	_explode(owner_center, Color(3.2, 2.15, 0.65, 1.0), Color(1.6, 0.55, 0.08, 1.0), 16.0, 18.0)
+	_explode(owner_ground, Color(3.2, 2.15, 0.65, 1.0), Color(1.6, 0.55, 0.08, 1.0), 16.0, 18.0)
 	for i in range(beam_count):
 		var angle := TAU * float(i) / float(beam_count)
-		var end := (owner_center + Vector2(cos(angle), sin(angle)) * radius).round()
-		var beam := _line(owner_center, end, Color(3.1, 1.4, 0.55, 1.0), Color(1.5, 0.3, 0.08, 0.24))
-		_damage_line(owner_center, end, 4.0)
+		var end := (IsoVfx.ground_point(owner_ground, angle, radius)).round()
+		var beam := _line(owner_ground, end, Color(3.1, 1.4, 0.55, 1.0), Color(1.5, 0.3, 0.08, 0.24))
+		_damage_line(owner_ground, end, 4.0)
 		_explode(end, Color(3.0, 1.15, 0.4, 1.0), Color(1.5, 0.28, 0.08, 1.0), 10.0, 10.0)
 		_fade_free(beam, 0.14)
 	await _sleep(0.05)
@@ -1157,13 +1199,13 @@ func _s2_mass_ejection() -> void:
 	var tier := secondary_tier
 	var radius := 76.0 + float(tier) * 14.0
 	for i in range(3):
-		_pulse_ring(owner_center, radius - float(i) * 18.0, Color(0.9, 2.3, 3.2, 1.0), Color(0.15, 0.6, 1.45, 0.22), 0.13, 28, float(i) * 0.15)
+		_pulse_ring(owner_ground, radius - float(i) * 18.0, Color(0.9, 2.3, 3.2, 1.0), Color(0.15, 0.6, 1.45, 0.22), 0.13, 28, float(i) * 0.15)
 		await _sleep(0.04)
-	_radial_hit(owner_center, radius, false)
+	_radial_hit(owner_ground, radius, false)
 	await _sleep(0.10)
-	_explode(owner_center, Color(1.5, 2.9, 3.45, 1.0), Color(0.2, 0.7, 1.6, 1.0), 24.0 + float(tier) * 3.0, 28.0 + float(tier) * 4.0)
-	_radial_hit(owner_center, radius + 10.0, true)
-	_pulse_ring(owner_center, radius + 12.0, Color(1.4, 2.8, 3.4, 1.0), Color(0.2, 0.7, 1.6, 0.25), 0.20, 36)
+	_explode(owner_ground, Color(1.5, 2.9, 3.45, 1.0), Color(0.2, 0.7, 1.6, 1.0), 24.0 + float(tier) * 3.0, 28.0 + float(tier) * 4.0)
+	_radial_hit(owner_ground, radius + 10.0, true)
+	_pulse_ring(owner_ground, radius + 12.0, Color(1.4, 2.8, 3.4, 1.0), Color(0.2, 0.7, 1.6, 0.25), 0.20, 36)
 
 # S3 PRIMARY: PHASE NEEDLES
 func _s3_phase_needles() -> void:
@@ -1173,8 +1215,8 @@ func _s3_phase_needles() -> void:
 	var spread := deg_to_rad(48.0 + float(tier) * 6.0)
 	for i in range(shard_count):
 		var f := 0.0 if shard_count == 1 else (float(i) / float(shard_count - 1) - 0.5)
-		var shard_dir := direction.rotated(f * spread)
-		var end := (origin + shard_dir * reach).round()
+		var shard_offset := IsoVfx.ground_vector(direction, reach, f * spread)
+		var end := (origin + shard_offset).round()
 		_dotted_trace(origin, end, Color(1.9, 2.5, 3.3, 1.0), Color(0.55, 0.85, 1.8, 1.0), 8.0, 0.16)
 		_damage_line(origin, end, 3.0 + float(tier) * 0.5)
 		_explode(end, Color(2.1, 2.7, 3.4, 1.0), Color(0.55, 0.85, 1.8, 1.0), 8.0 + float(tier), 8.0 + float(tier))
@@ -1187,13 +1229,13 @@ func _s3_phase_bloom() -> void:
 	for wave in range(waves):
 		var radius := 58.0 + float(wave) * 18.0 + float(tier) * 8.0
 		var count := 8 + tier * 4
-		_pulse_ring(owner_center, radius, Color(1.8, 2.45, 3.3, 1.0), Color(0.55, 0.85, 1.8, 0.25), 0.16, count * 2, float(wave) * 0.18)
-		_spark_pixels(owner_center, Color(2.0, 2.65, 3.4, 1.0), Color(0.55, 0.85, 1.8, 1.0), count, radius, 0.18)
-		_radial_hit(owner_center, radius, true)
+		_pulse_ring(owner_ground, radius, Color(1.8, 2.45, 3.3, 1.0), Color(0.55, 0.85, 1.8, 0.25), 0.16, count * 2, float(wave) * 0.18)
+		_spark_pixels(owner_ground, Color(2.0, 2.65, 3.4, 1.0), Color(0.55, 0.85, 1.8, 1.0), count, radius, 0.18)
+		_radial_hit(owner_ground, radius, true)
 		for i in range(count):
 			if i % 2 != 0:
 				continue
 			var angle := TAU * float(i) / float(count) + float(wave) * 0.14
-			var hit := owner_center + Vector2(cos(angle), sin(angle)) * radius
+			var hit := IsoVfx.ground_point(owner_ground, angle, radius)
 			_explode(hit, Color(2.0, 2.65, 3.4, 1.0), Color(0.55, 0.85, 1.8, 1.0), 9.0, 9.0)
 		await _sleep(0.07)

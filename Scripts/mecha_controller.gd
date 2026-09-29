@@ -543,7 +543,7 @@ func _spawn_special_ability(direction: Vector2) -> void:
 	var effect := SpecialAbilityScript.new() as SpacehaulSpecialAbility
 	root.add_child(effect)
 	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
-	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier)
+	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), global_position, _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier)
 
 func _get_attack_target(attack_dir: Vector2) -> Vector2:
 	var joy_id := _first_connected_joypad()
