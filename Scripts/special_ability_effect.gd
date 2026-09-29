@@ -3,6 +3,7 @@ class_name SpacehaulSpecialAbility
 
 const ExplosionScript = preload("res://Scripts/special_explosion.gd")
 const ProjectileFxScript = preload("res://Scripts/special_projectile.gd")
+const AbilityParticleScript = preload("res://Scripts/ability_particle_emitter.gd")
 
 # All generated VFX are authored in world pixels: 1x1 core pixels with a 2x2
 # additive bloom. Because the project uses nearest filtering and canvas stretch,
@@ -111,6 +112,43 @@ func _run() -> void:
 func _sleep(seconds: float) -> void:
 	await get_tree().create_timer(maxf(seconds, 0.001)).timeout
 
+func _particle_profile() -> String:
+	match mecha_id:
+		"M1": return "ember"
+		"M2": return "ion"
+		"M3": return "ember"
+		"R1": return "prism"
+		"R2": return "sparks"
+		"R3": return "exhaust"
+		"R4": return "electric"
+		"S1": return "solar"
+		"S2": return "gravity"
+		"S3": return "phase"
+		_: return "ion"
+
+func _spawn_follow_particles(target_node: Node2D, core: Color, glow: Color, duration: float, rate: float = 52.0) -> void:
+	if target_node == null or root == null:
+		return
+	var emitter := AbilityParticleScript.new() as SpacehaulAbilityParticles
+	root.add_child(emitter)
+	emitter.setup_follow(target_node, core, glow, _particle_profile(), duration, rate)
+
+func _spawn_path_particles(points: PackedVector2Array, core: Color, glow: Color, count: int = 7, life: float = 0.20) -> void:
+	if root == null or points.size() < 2:
+		return
+	var emitter := AbilityParticleScript.new() as SpacehaulAbilityParticles
+	root.add_child(emitter)
+	emitter.setup_path(points, core, glow, _particle_profile(), count, life)
+
+func _spawn_impact_particles(at: Vector2, core: Color, glow: Color, radius: float) -> void:
+	if root == null:
+		return
+	var emitter := AbilityParticleScript.new() as SpacehaulAbilityParticles
+	root.add_child(emitter)
+	var count := clampi(int(round(radius * 0.42)), 5, 12)
+	var speed := clampf(radius * 1.35, 18.0, 46.0)
+	emitter.setup_burst(at.round(), core, glow, _particle_profile(), count, speed, 0.24)
+
 func _line(from: Vector2, to: Vector2, color: Color, glow_color: Color = Color.TRANSPARENT) -> Node2D:
 	var container := Node2D.new()
 	container.z_as_relative = false
@@ -136,6 +174,14 @@ func _line(from: Vector2, to: Vector2, color: Color, glow_color: Color = Color.T
 	var additive := CanvasItemMaterial.new()
 	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	container.material = additive
+	if from.distance_to(to) >= 32.0 and _rng.randf() < 0.58:
+		_spawn_path_particles(
+			PackedVector2Array([from.round(), to.round()]),
+			color,
+			glow_color,
+			clampi(int(round(from.distance_to(to) / 42.0)), 2, 5),
+			0.18
+		)
 	return container
 
 func _polyline(points: PackedVector2Array, color: Color, glow_color: Color = Color.TRANSPARENT) -> Node2D:
@@ -163,6 +209,17 @@ func _polyline(points: PackedVector2Array, color: Color, glow_color: Color = Col
 	var additive := CanvasItemMaterial.new()
 	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	container.material = additive
+	var total_length := 0.0
+	for i in range(points.size() - 1):
+		total_length += points[i].distance_to(points[i + 1])
+	if total_length >= 24.0:
+		_spawn_path_particles(
+			points,
+			color,
+			glow_color,
+			clampi(int(round(total_length / 42.0)), 4, 10),
+			0.20
+		)
 	return container
 
 func _fade_free(node: Node2D, seconds: float = 0.12) -> void:
@@ -214,6 +271,7 @@ func _explode(at: Vector2, core: Color = Color(3.0, 1.5, 0.45, 1.0), glow: Color
 	var fx := ExplosionScript.new() as SpacehaulSpecialExplosion
 	root.add_child(fx)
 	fx.setup(at.round(), core, glow, radius * impact_scale)
+	_spawn_impact_particles(at, core, glow, radius * impact_scale)
 	_damage_radius(at, hit_radius * impact_scale, (at - owner_center).normalized())
 
 func _damage_radius(at: Vector2, radius: float, push_dir: Vector2) -> void:
@@ -287,6 +345,7 @@ func _straight_shot_from(start: Vector2, dest: Vector2, core: Color, glow: Color
 	var projectile := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 	root.add_child(projectile)
 	projectile.setup(start.round(), core, glow, 1.0)
+	_spawn_follow_particles(projectile, core, glow, travel_time + 0.05, 58.0)
 	var tracer := _line(start, dest, Color(core.r, core.g, core.b, 0.72), Color(glow.r, glow.g, glow.b, 0.22))
 	_fade_free(tracer, minf(0.12, travel_time))
 	var tween := root.create_tween()
@@ -309,6 +368,7 @@ func _arc_shot_from(
 	var projectile := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 	root.add_child(projectile)
 	projectile.setup(start.round(), core, glow, 1.0)
+	_spawn_follow_particles(projectile, core, glow, travel_time + 0.08, 64.0)
 
 	var trail_container := Node2D.new()
 	trail_container.z_as_relative = false
