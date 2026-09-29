@@ -7,6 +7,13 @@ const RUN_DURATION := 20.0 * 60.0
 const DECK_DURATION := 4.0 * 60.0
 const SECONDARY_UNLOCK_TIME := 60.0
 
+# Recording helper. Enable this on the TestWorld root in the Inspector when you
+# want to capture late-run footage without playing through the entire run.
+# Disable it again before making the public build. No keyboard trigger is used.
+@export_category("Video Capture")
+@export var video_capture_mode := false
+@export_range(1.0, 19.0, 0.5) var video_capture_start_minutes := 15.0
+
 @onready var deck: ProceduralDeck = $ProceduralDeck
 @onready var mecha_manager: MechaManager = $MechaManager
 @onready var enemy_manager: SpacehaulEnemyManager = $EnemyManager
@@ -78,6 +85,9 @@ func _ready() -> void:
 		_on_active_mecha_changed(active)
 	enemy_manager.reset_run()
 	_update_hud()
+
+	if video_capture_mode:
+		call_deferred("_apply_video_capture_state")
 
 func _process(delta: float) -> void:
 	_update_damage_overlay(delta)
@@ -237,6 +247,96 @@ func _restart_run() -> void:
 	mecha_manager.start_new_run(true)
 	enemy_manager.reset_run()
 	_update_hud()
+
+	if video_capture_mode:
+		call_deferred("_apply_video_capture_state")
+
+func _apply_video_capture_state() -> void:
+	# Stage a believable late-run state for recording. The clock, deck, enemy
+	# pressure, secondary weapon and upgrade budget all advance together.
+	get_tree().paused = false
+	_game_over = false
+	_run_complete = false
+	_deck_transition_active = false
+
+	var requested_seconds := video_capture_start_minutes * 60.0
+	_run_time = clampf(requested_seconds, 0.0, RUN_DURATION - 1.0)
+
+	var palette_count := maxi(1, deck.get_deck_palette_count())
+	_deck_number = clampi(
+		int(floor(_run_time / DECK_DURATION)) + 1,
+		1,
+		palette_count
+	)
+	_next_deck_time = minf(RUN_DURATION, float(_deck_number) * DECK_DURATION)
+
+	# Approximate the amount of progression a healthy run would have accumulated
+	# by this point. At the default 15:00 start this produces level 14, enough
+	# budget for both ability trees plus several useful chassis upgrades.
+	_level = clampi(2 + int(floor(video_capture_start_minutes * 0.8)), 2, 18)
+	_salvage_required = 5 + _level * 4
+	_salvage = int(floor(float(_salvage_required) * 0.35))
+	_salvage_magnet_radius = 86.0
+
+	_secondary_announced = _run_time >= SECONDARY_UNLOCK_TIME
+
+	deck.set_deck_palette(_deck_number)
+	deck.generate_new_level()
+
+	var active := mecha_manager.get_active_mecha()
+	if active != null:
+		active.set_secondary_unlocked(_secondary_announced)
+		_apply_video_capture_upgrades(active, maxi(0, _level - 1))
+		active.repair_hull(active.get_max_hull())
+
+	# generate_new_level() intentionally displays the deck banner during normal
+	# play. Hide it here so recording can begin on a clean gameplay frame.
+	if _banner_tween != null and _banner_tween.is_valid():
+		_banner_tween.kill()
+	deck_banner.hide()
+
+	enemy_manager.prepare_video_capture_state(_run_time)
+	_update_hud()
+
+func _apply_video_capture_upgrades(active: MechaController, upgrade_budget: int) -> void:
+	var budget := upgrade_budget
+
+	# Chassis-specific ability evolution gets priority, alternating LMB and RMB.
+	while budget > 0 and (active.can_upgrade_primary_ability() or active.can_upgrade_secondary_ability()):
+		if active.can_upgrade_primary_ability() and budget > 0:
+			active.upgrade_primary_ability()
+			budget -= 1
+		if active.can_upgrade_secondary_ability() and budget > 0:
+			active.upgrade_secondary_ability()
+			budget -= 1
+
+	# Spend the remaining simulated level-up choices on a deterministic,
+	# recording-friendly build. This avoids opening upgrade menus on startup.
+	var generic_step := 0
+	while budget > 0:
+		match generic_step % 10:
+			0:
+				active.apply_primary_cooling(0.85)
+			1:
+				active.apply_secondary_cooling(0.85)
+			2:
+				active.add_max_hull(20, 20)
+			3:
+				active.apply_impact_multiplier(1.18)
+			4:
+				active.apply_move_speed_multiplier(1.08)
+			5:
+				active.add_max_hull(20, 20)
+			6:
+				_salvage_magnet_radius = minf(220.0, _salvage_magnet_radius * 1.20)
+			7:
+				active.apply_primary_cooling(0.85)
+			8:
+				active.apply_secondary_cooling(0.85)
+			9:
+				active.apply_impact_multiplier(1.18)
+		generic_step += 1
+		budget -= 1
 
 func _on_deck_regenerated(_new_spawn: Vector2, new_seed: int) -> void:
 	mecha_manager.relocate_after_deck_regeneration()

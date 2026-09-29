@@ -64,6 +64,21 @@ func reset_run() -> void:
 func set_spawning_enabled(value: bool) -> void:
 	_spawning_enabled = value
 
+func prepare_video_capture_state(run_time: float) -> void:
+	# Skip the normal opening/deck grace period so a recording starts directly
+	# in the pressure appropriate to the staged run time. Also advance the elite
+	# schedule so the game does not try to catch up with a chain of overdue elites.
+	_spawning_enabled = true
+	_clear_population()
+	_deck_grace = 0.0
+	_spawn_timer = 0.0
+
+	if run_time < 180.0:
+		_next_elite_time = 180.0
+	else:
+		var elapsed_elite_windows := int(floor((run_time - 180.0) / 75.0)) + 1
+		_next_elite_time = 180.0 + float(elapsed_elite_windows) * 75.0
+
 func _on_deck_regenerated(_spawn: Vector2, seed_value: int) -> void:
 	_rng.seed = seed_value ^ 0xE11E5 ^ int(_get_run_time() * 10.0)
 	_clear_population()
