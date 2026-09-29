@@ -128,7 +128,11 @@ func _process(delta: float) -> void:
 	if _run_time >= RUN_DURATION:
 		_complete_run()
 	elif _run_time >= _next_deck_time and not _deck_transition_active:
-		_start_deck_transition()
+		# A live boss owns the arena. Delay the scheduled deck transfer until the
+		# encounter resolves so the Broodmother cannot be escaped or stranded by
+		# procedural regeneration.
+		if not enemy_manager.is_boss_active():
+			_start_deck_transition()
 
 	_update_hud()
 

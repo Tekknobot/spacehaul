@@ -1,0 +1,16 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://Scripts/brood_egg.gd" id="1_egg"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_egg"]
+size = Vector2(13, 10)
+
+[node name="BroodEgg" type="CharacterBody2D"]
+motion_mode = 1
+script = ExtResource("1_egg")
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+position = Vector2(0, -6)
+shape = SubResource("RectangleShape2D_egg")
