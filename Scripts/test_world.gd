@@ -11,7 +11,7 @@ const SECONDARY_UNLOCK_TIME := 60.0
 
 # Recording helper. Enable this on the TestWorld root in the Inspector when you
 # want to capture late-run footage without playing through the entire run.
-# Disable it again before making the public build. No keyboard trigger is used.
+# Disable it again before making the public build. No keyboard trigger is used here.
 @export_category("Video Capture")
 @export var video_capture_mode := false
 @export_range(1.0, 19.0, 0.5) var video_capture_start_minutes := 15.0
