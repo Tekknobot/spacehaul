@@ -67,6 +67,8 @@ var _hud_salvage: Label
 var _hud_time: Label
 var _hud_deck: Label
 var _hud_hostiles: Label
+var _event_feed: Label
+var _event_feed_tween: Tween
 var _damage_overlay: ColorRect
 var _damage_material: ShaderMaterial
 var _damage_intensity := 0.0
@@ -114,6 +116,7 @@ func _ready() -> void:
 	deck_banner.hide()
 	deck_banner.z_index = 1100
 	_build_compact_hud()
+	_build_event_feed()
 	_build_omega_guidance()
 	_build_damage_overlay()
 	_build_deck_transition_overlay()
@@ -244,7 +247,7 @@ func collect_omega_core() -> void:
 	if enemy_manager != null and enemy_manager.has_method("notify_omega_core_collected"):
 		enemy_manager.notify_omega_core_collected()
 	_update_hud()
-	_show_banner("OMEGA CORE ACQUIRED", 0.82)
+	_show_banner("OMEGA CORE ACQUIRED", 2.82)
 	call_deferred("_try_open_omega_mutation")
 
 func _try_open_omega_mutation() -> void:
@@ -259,7 +262,7 @@ func _try_open_omega_mutation() -> void:
 		return
 	if not active.can_accept_omega_mutation():
 		_omega_core_stored = false
-		_show_banner("OMEGA ARSENAL COMPLETE", 0.95)
+		_show_banner("OMEGA ARSENAL COMPLETE", 2.95)
 		return
 	_present_omega_choices()
 
@@ -303,6 +306,10 @@ func _on_active_mecha_changed(mecha: MechaController) -> void:
 func _on_omega_primary_mode_changed(enabled: bool, display_name: String) -> void:
 	SFX.play_ui(self, "level", -13.5, 1.08 if enabled else 0.92)
 	_update_hud()
+	if enabled:
+		_show_banner("OMEGA MODE   %s" % display_name, 2.70)
+	else:
+		_show_banner("PRIMARY MODE   STANDARD", 2.70)
 
 func _on_hull_changed(current_hull: int, max_hull: int) -> void:
 	if _last_hull >= 0 and current_hull < _last_hull:
@@ -311,6 +318,7 @@ func _on_hull_changed(current_hull: int, max_hull: int) -> void:
 	if ratio <= 0.30 and not _low_hull_warned and current_hull > 0:
 		_low_hull_warned = true
 		SFX.play(self, "warning", -7.0, 0.92)
+		_show_banner("HULL CRITICAL   %d/%d" % [current_hull, max_hull], 2.10)
 	elif ratio > 0.42:
 		_low_hull_warned = false
 	_last_hull = current_hull
@@ -976,7 +984,7 @@ func _start_deck_transition(cheat_cycle: bool = false) -> void:
 	enemy_manager.set_spawning_enabled(false)
 	get_tree().paused = true
 	active.begin_deck_transition()
-	_show_banner("DECK TRANSFER", 0.62)
+	_show_banner("DECK TRANSFER", 2.62)
 	SFX.play_ui(self, "boost", -12.5, 0.72)
 
 	var out_tween := create_tween()
@@ -1005,7 +1013,7 @@ func _start_deck_transition(cheat_cycle: bool = false) -> void:
 
 	_set_deck_transition_overlay_amount(0.92)
 	SFX.play_ui(self, "boost", -14.0, 1.12)
-	_show_banner("DECK %d   %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)], 0.95)
+	_show_banner("DECK %d   %s" % [_deck_number, deck.get_deck_palette_name(_deck_number)], 2.95)
 
 	var in_tween := create_tween()
 	in_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
@@ -1283,10 +1291,38 @@ func _build_compact_hud() -> void:
 	_hud_level = _make_stat_cell(row, Color(0.80, 0.62, 1.0, 1.0))
 	_hud_salvage = _make_stat_cell(row, Color(1.0, 0.80, 0.38, 1.0))
 	_hud_omega = _make_stat_cell(row, Color(0.96, 0.44, 1.0, 1.0))
-	_hud_omega.add_theme_font_size_override("font_size", 10)
+	_hud_omega.add_theme_font_size_override("font_size", 11)
 	_hud_time = _make_stat_cell(row, Color(0.72, 0.88, 0.96, 1.0))
 	_hud_deck = _make_stat_cell(row, Color(0.47, 0.76, 1.0, 1.0))
 	_hud_hostiles = _make_stat_cell(row, Color(1.0, 0.48, 0.34, 1.0))
+
+func _build_event_feed() -> void:
+	# Lightweight replacement for the old centered banner panel. Important run
+	# events appear as plain white text in the lower-left, then quietly fade away.
+	_event_feed = Label.new()
+	_event_feed.name = "EventFeed"
+	_event_feed.anchor_left = 0.0
+	_event_feed.anchor_top = 1.0
+	_event_feed.anchor_right = 0.0
+	_event_feed.anchor_bottom = 1.0
+	_event_feed.offset_left = 14.0
+	_event_feed.offset_top = -92.0
+	_event_feed.offset_right = 560.0
+	_event_feed.offset_bottom = -18.0
+	_event_feed.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_event_feed.process_mode = Node.PROCESS_MODE_ALWAYS
+	_event_feed.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_event_feed.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_event_feed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_event_feed.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_event_feed.add_theme_font_size_override("font_size", 16)
+	_event_feed.add_theme_color_override("font_color", Color.WHITE)
+	_event_feed.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.92))
+	_event_feed.add_theme_constant_override("outline_size", 2)
+	_event_feed.modulate.a = 0.0
+	_event_feed.hide()
+	hud.add_child(_event_feed)
+
 
 func _make_stat_cell(row: HBoxContainer, color: Color) -> Label:
 	var panel := PanelContainer.new()
@@ -1311,7 +1347,7 @@ func _make_stat_cell(row: HBoxContainer, color: Color) -> Label:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_font_size_override("font_size", 11)
 	label.add_theme_color_override("font_color", color)
 	panel.add_child(label)
 	return label
@@ -1320,6 +1356,12 @@ func _set_standard_hud_visible(value: bool) -> void:
 	_hud_visible = value
 	if _top_hud != null:
 		_top_hud.visible = value
+	if not value and _event_feed != null:
+		if _event_feed_tween != null and _event_feed_tween.is_valid():
+			_event_feed_tween.kill()
+		_event_feed_tween = null
+		_event_feed.modulate.a = 0.0
+		_event_feed.hide()
 
 func _build_damage_overlay() -> void:
 	_damage_overlay = ColorRect.new()
@@ -1492,16 +1534,31 @@ func _record_and_get_best_time(value: float) -> float:
 		config.save(path)
 	return best
 
-func _show_banner(_message: String, _hold_time: float = 0.8) -> void:
-	# Transient gameplay banners are intentionally disabled. The compact HUD and
-	# dedicated interactive panels now carry all progression/state information,
-	# keeping combat and OMEGA cycling visually uninterrupted.
-	if _banner_tween != null and _banner_tween.is_valid():
-		_banner_tween.kill()
-	_banner_tween = null
+func _show_banner(message: String, hold_time: float = 2.8) -> void:
+	# Former centered banner messages now use the lower-left event feed. New events
+	# replace the current line instead of stacking, which keeps combat readable.
 	if deck_banner != null:
 		deck_banner.modulate.a = 0.0
 		deck_banner.hide()
+	if _banner_tween != null and _banner_tween.is_valid():
+		_banner_tween.kill()
+	_banner_tween = null
+
+	if _event_feed == null or not _hud_visible or message.strip_edges().is_empty():
+		return
+
+	if _event_feed_tween != null and _event_feed_tween.is_valid():
+		_event_feed_tween.kill()
+
+	_event_feed.text = message
+	_event_feed.modulate.a = 1.0
+	_event_feed.show()
+
+	_event_feed_tween = create_tween()
+	_event_feed_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	_event_feed_tween.tween_interval(maxf(0.35, hold_time))
+	_event_feed_tween.tween_property(_event_feed, "modulate:a", 0.0, 0.38)
+	_event_feed_tween.tween_callback(_event_feed.hide)
 
 func _build_upgrade_overlay() -> void:
 	_upgrade_overlay = CenterContainer.new()
@@ -1696,7 +1753,7 @@ func _choose_omega_mutation(index: int) -> void:
 	var status := "OMEGA ACQUIRED %d/%d   %s" % [acquired, capacity, active.get_legendary_mutation_display_name()]
 	if active.has_all_omega_mutations():
 		status = "OMEGA ARSENAL COMPLETE   %s" % active.get_legendary_mutation_display_name()
-	_show_banner("%s\nMOUSE WHEEL   CYCLE STANDARD / OMEGA" % status, 1.35)
+	_show_banner("%s\nMOUSE WHEEL   CYCLE STANDARD / OMEGA" % status, 2.35)
 	_update_hud()
 	call_deferred("_check_level_up")
 
