@@ -8,6 +8,7 @@ const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
 const EggScene = preload("res://Scenes/brood_egg.tscn")
 const SFX = preload("res://Scripts/sound_fx.gd")
 const EnemyAttackVfx = preload("res://Scripts/enemy_attack_vfx.gd")
+const IsoVfx = preload("res://Scripts/isometric_vfx.gd")
 
 const FRAME_SIZE := Vector2(64.0, 64.0)
 const FRAME_COUNT := 8
@@ -43,6 +44,8 @@ var _base_sprite_position := Vector2(0.0, -24.0)
 var _rng := RandomNumberGenerator.new()
 var _eggs: Array[Node] = []
 var _dissolve_material: ShaderMaterial
+var _rmb_push_target := Vector2.ZERO
+var _rmb_push_time := 0.0
 
 func _ready() -> void:
 	add_to_group("enemies")
@@ -64,6 +67,13 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	_update_depth_order()
 	if _dead:
+		return
+
+	# RMB crowd control can physically displace the boss as well. Movement is
+	# collision-aware and slightly slower than standard enemies, but the target is
+	# still the ability perimeter so secondaries remain dependable breathing-room tools.
+	if _rmb_push_time > 0.0:
+		_process_rmb_perimeter_push(delta)
 		return
 
 	_shot_time = maxf(0.0, _shot_time - delta)
@@ -296,6 +306,43 @@ func _try_contact_hit() -> void:
 	EnemyAttackVfx.spawn_slash(get_tree().current_scene, global_position + Vector2(0.0, -22.0), push, Color(1.65, 3.2, 0.72, 1.0), Color(0.30, 1.40, 0.22, 1.0), true)
 	EnemyAttackVfx.spawn_ring(get_tree().current_scene, global_position, 16.0, Color(1.45, 3.0, 0.62, 1.0), Color(0.25, 1.28, 0.18, 1.0), 0.22, 24, 1.5)
 	_contact_time = 1.15
+
+func receive_rmb_perimeter_push(center: Vector2, radius: float) -> void:
+	if _dead or radius <= 0.0:
+		return
+
+	var logical_delta := IsoVfx.unproject_ground(global_position - center)
+	var current_radius := logical_delta.length()
+	if current_radius >= radius - 1.0:
+		return
+	if logical_delta.length_squared() <= 0.001:
+		var angle := _rng.randf_range(0.0, TAU)
+		logical_delta = Vector2(cos(angle), sin(angle))
+
+	var logical_direction := logical_delta.normalized()
+	_rmb_push_target = (center + IsoVfx.project_ground(logical_direction * radius)).round()
+	var gap := maxf(0.0, radius - current_radius)
+	_rmb_push_time = clampf(0.16 + gap / 520.0, 0.18, 0.32)
+
+func _process_rmb_perimeter_push(delta: float) -> void:
+	var remaining := maxf(_rmb_push_time, delta)
+	var to_target := _rmb_push_target - global_position
+
+	if to_target.length_squared() <= 1.0:
+		_rmb_push_time = 0.0
+		velocity = Vector2.ZERO
+		return
+
+	_rmb_push_time = maxf(0.0, _rmb_push_time - delta)
+	velocity = to_target / remaining
+	if velocity.length() > 760.0:
+		velocity = velocity.normalized() * 760.0
+	_update_facing(velocity)
+	_play_motion_animation(true)
+	move_and_slide()
+
+	if _rmb_push_time <= 0.0:
+		velocity = Vector2.ZERO
 
 func take_projectile_hit(direction: Vector2) -> void:
 	if _dead:

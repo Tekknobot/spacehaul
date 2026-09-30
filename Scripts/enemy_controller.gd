@@ -8,6 +8,7 @@ const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
 const SFX = preload("res://Scripts/sound_fx.gd")
 const EnemyAttackVfx = preload("res://Scripts/enemy_attack_vfx.gd")
 const ParticleScript = preload("res://Scripts/ability_particle_emitter.gd")
+const IsoVfx = preload("res://Scripts/isometric_vfx.gd")
 
 const FRAME_SIZE := Vector2(32.0, 32.0)
 const FRAME_COUNT := 8
@@ -75,6 +76,11 @@ var _omega_ring_glow: Line2D
 var _omega_orbit_lines: Array[Line2D] = []
 var _omega_label: Label
 
+# RMB perimeter displacement temporarily owns locomotion so the crowd-control
+# actually clears space instead of being cancelled immediately by chase AI.
+var _rmb_push_target := Vector2.ZERO
+var _rmb_push_time := 0.0
+
 func _ready() -> void:
 	add_to_group("enemies")
 	collision_layer = 2
@@ -100,6 +106,13 @@ func _physics_process(delta: float) -> void:
 
 	if omega_carrier:
 		_update_omega_carrier_vfx(delta)
+
+	# A secondary ability can explicitly clear this enemy to the edge of its
+	# radius. Resolve that forced movement before normal hurt/chase/attack logic so
+	# the AI cannot instantly counter-steer back into the protected space.
+	if _rmb_push_time > 0.0:
+		_process_rmb_perimeter_push(delta)
+		return
 
 	_attack_time = maxf(0.0, _attack_time - delta)
 	if _health_bar_time > 0.0:
@@ -457,6 +470,49 @@ func _projectile_profile() -> String:
 			return "ember"
 		_:
 			return "bio"
+
+func receive_rmb_perimeter_push(center: Vector2, radius: float) -> void:
+	if _dead or radius <= 0.0:
+		return
+
+	var logical_delta := IsoVfx.unproject_ground(global_position - center)
+	var current_radius := logical_delta.length()
+	if current_radius >= radius - 1.0:
+		return
+
+	# If an enemy is exactly on top of the mecha, choose a stable pseudo-random
+	# escape direction so stacked enemies do not all collapse onto +X.
+	if logical_delta.length_squared() <= 0.001:
+		var angle := _rng.randf_range(0.0, TAU)
+		logical_delta = Vector2(cos(angle), sin(angle))
+
+	var logical_direction := logical_delta.normalized()
+	_rmb_push_target = (center + IsoVfx.project_ground(logical_direction * radius)).round()
+
+	var gap := maxf(0.0, radius - current_radius)
+	_rmb_push_time = clampf(0.11 + gap / 560.0, 0.12, 0.26)
+	# Keep the enemy in a brief recovery state after the forced movement so it
+	# cannot immediately erase the player's newly created breathing room.
+	_hurt_time = maxf(_hurt_time, _rmb_push_time + 0.08)
+
+func _process_rmb_perimeter_push(delta: float) -> void:
+	var remaining := maxf(_rmb_push_time, delta)
+	var to_target := _rmb_push_target - global_position
+
+	if to_target.length_squared() <= 1.0:
+		_rmb_push_time = 0.0
+		velocity = Vector2.ZERO
+		return
+
+	_rmb_push_time = maxf(0.0, _rmb_push_time - delta)
+	velocity = to_target / remaining
+	if velocity.length() > 950.0:
+		velocity = velocity.normalized() * 950.0
+	_update_facing(velocity)
+	move_and_slide()
+
+	if _rmb_push_time <= 0.0:
+		velocity = Vector2.ZERO
 
 func take_projectile_hit(direction: Vector2) -> void:
 	if _dead:

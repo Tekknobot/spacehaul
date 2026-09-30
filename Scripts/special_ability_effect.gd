@@ -117,10 +117,85 @@ func _run() -> void:
 				await _s3_phase_needles()
 		_:
 			await _straight_shot_from(origin, _target_clamped(190.0), Color(0.75, 2.4, 2.8, 1.0), Color(0.2, 1.0, 1.5, 1.0), 0.18, 14.0)
+
+	# RMB abilities are SPACEHAUL's emergency crowd-control layer. Preserve every
+	# chassis-specific secondary effect, then finish by physically clearing the
+	# occupied combat disk: surviving mobile enemies inside the authored ability
+	# radius are pushed all the way toward that radius' perimeter. This is a
+	# movement/control effect only; it does not add another hidden damage hit.
+	if alternate:
+		_push_enemies_to_perimeter(owner_ground, _secondary_perimeter_radius())
+
 	queue_free()
 
 func _sleep(seconds: float) -> void:
 	await get_tree().create_timer(maxf(seconds, 0.001), preview_mode).timeout
+
+# Returns the outer gameplay footprint for each RMB at its current upgrade tier.
+# These values mirror the radii already authored by the individual secondary
+# routines below, including their largest upgraded finishing wave where relevant.
+func _secondary_perimeter_radius() -> float:
+	var tier := secondary_tier
+	match mecha_id:
+		"M1":
+			var waves := 1 + (1 if tier >= 2 else 0) + (1 if tier >= 3 else 0)
+			return 64.0 + float(tier) * 10.0 + float(waves - 1) * 22.0
+		"M2":
+			var m2_radius := 72.0 + float(tier) * 14.0
+			return m2_radius + (18.0 if tier >= 3 else 0.0)
+		"M3":
+			return 72.0 + float(tier) * 10.0
+		"R1":
+			return 76.0 + float(tier) * 10.0
+		"R2":
+			return 82.0 + float(tier) * 11.0
+		"R3":
+			return 72.0 + float(tier) * 10.0 + (8.0 if tier >= 3 else 0.0)
+		"R4":
+			var r4_waves := 2 + tier
+			return 38.0 + float(r4_waves - 1) * (20.0 + float(tier) * 2.0) + 8.0
+		"S1":
+			var s1_radius := 78.0 + float(tier) * 11.0
+			if tier >= 3:
+				return s1_radius + 28.0
+			if tier >= 2:
+				return s1_radius + 14.0
+			return s1_radius
+		"S2":
+			var s2_radius := 76.0 + float(tier) * 14.0
+			if tier >= 3:
+				return s2_radius + 26.0
+			if tier >= 2:
+				return s2_radius + 18.0
+			return s2_radius + 10.0
+		"S3":
+			# Final web wave: 58 + wave*18 + tier*8, with wave == tier.
+			return 58.0 + float(tier) * 26.0
+		_:
+			return 72.0
+
+# Universal RMB crowd-control pass. We intentionally operate on the enemy group
+# rather than dealing damage through another shape query: an enemy only needs to
+# be inside the secondary's final footprint to be displaced. Stationary hazards
+# such as Broodmother eggs do not implement receive_rmb_perimeter_push(), so they
+# keep their authored in-place behavior.
+func _push_enemies_to_perimeter(center: Vector2, radius: float) -> void:
+	if preview_mode or radius <= 0.0 or get_tree() == null:
+		return
+
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		if enemy == null or not is_instance_valid(enemy):
+			continue
+		if not enemy.has_method("receive_rmb_perimeter_push"):
+			continue
+
+		var body := enemy as Node2D
+		if body == null:
+			continue
+		if IsoVfx.ground_distance(center, body.global_position) > radius:
+			continue
+
+		enemy.call("receive_rmb_perimeter_push", center, radius)
 
 func _particle_profile() -> String:
 	match mecha_id:

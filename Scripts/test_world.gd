@@ -126,12 +126,13 @@ func _ready() -> void:
 	enemy_manager.set_spawning_enabled(false)
 	_update_hud()
 
-	if video_capture_mode:
+	# Video capture uses the same chassis showroom as a normal run. This keeps the
+	# developer shortcut compatible with the title/menu flow and lets footage be
+	# staged for whichever chassis is selected instead of silently forcing the
+	# MechaManager fixed starter.
+	if video_capture_mode and mecha_manager.fixed_starting_mecha in MechaManager.MECHA_IDS:
 		_selected_mecha_id = mecha_manager.fixed_starting_mecha
-		_start_selected_run()
-		call_deferred("_apply_video_capture_state")
-	else:
-		_show_mecha_select("SELECT A CHASSIS")
+	_show_mecha_select("VIDEO CAPTURE" if video_capture_mode else "SELECT A CHASSIS")
 
 func _process(delta: float) -> void:
 	_update_damage_overlay(delta)
@@ -746,7 +747,13 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 		deck_banner.hide()
 	_set_standard_hud_visible(false)
 	if _mecha_select_status != null:
-		_mecha_select_status.text = "LEFT RIGHT   CYCLE CHASSIS      ENTER A   DEPLOY"
+		if video_capture_mode:
+			_mecha_select_status.text = "VIDEO CAPTURE  %02d:%02d   //   LEFT RIGHT CYCLE   ENTER A DEPLOY" % [
+				int(video_capture_start_minutes),
+				int(round(fmod(video_capture_start_minutes, 1.0) * 60.0))
+			]
+		else:
+			_mecha_select_status.text = "LEFT RIGHT   CYCLE CHASSIS      ENTER A   DEPLOY"
 	if _mecha_select_overlay != null:
 		_mecha_select_overlay.show()
 		_showroom_active = true
@@ -790,6 +797,13 @@ func _start_selected_run() -> void:
 	enemy_manager.reset_run()
 	_set_standard_hud_visible(true)
 	_update_hud()
+
+	# Stage the capture state only after the menu-selected chassis has actually
+	# been spawned. Deferred execution also lets the new mecha finish its normal
+	# _ready() setup before tiers, stats, Omega state and enemy pressure are applied.
+	# This path is used on first deploy and on any later re-deploy from the menu.
+	if video_capture_mode:
+		call_deferred("_apply_video_capture_state")
 
 func _apply_video_capture_state() -> void:
 	# Stage a believable run state for recording. The clock, deck, enemy pressure,
