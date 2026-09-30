@@ -170,6 +170,19 @@ func _ready() -> void:
 	set_deck_palette(1)
 	generate_new_level()
 
+func configure_for_expedition_deck(deck_number: int) -> void:
+	# Five expedition decks deliberately grow in footprint and room count. The
+	# minimap consumes grid_width/grid_height dynamically, so every size still
+	# fits the same HUD canvas rather than clipping outside it.
+	var stage := clampi(deck_number, 1, 5)
+	grid_width = 45 + (stage - 1) * 6
+	grid_height = 33 + (stage - 1) * 4
+	room_count = 13 + (stage - 1) * 2
+	extra_connection_count = 5 + (stage - 1)
+	hazard_count = 10 + (stage - 1) * 3
+	max_room_size = 9 + int(floor(float(stage - 1) * 0.5))
+
+
 func generate_new_level(requested_seed: int = -1) -> void:
 	seed_value = requested_seed if requested_seed >= 0 else int(Time.get_unix_time_from_system() * 1000.0) ^ randi()
 	_rng.seed = seed_value

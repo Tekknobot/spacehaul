@@ -26,6 +26,8 @@ var health := 84
 var max_health := 84
 var move_speed := 42.0
 var phase := 1
+var expedition_variant := 1
+var expedition_variant_name := "STEEL"
 
 var _target: MechaController
 var _dead := false
@@ -61,8 +63,78 @@ func _ready() -> void:
 	_target_refresh_time = 0.05
 	_strafe_sign = -1.0 if _rng.randf() < 0.5 else 1.0
 	_update_depth_order()
+	_apply_expedition_variant()
 	queue_redraw()
 	_spawn_phase_pulse()
+
+func configure_expedition_variant(deck_number: int) -> void:
+	expedition_variant = clampi(deck_number, 1, 5)
+	match expedition_variant:
+		1: expedition_variant_name = "STEEL"
+		2: expedition_variant_name = "MOTOR"
+		3: expedition_variant_name = "CRYO"
+		4: expedition_variant_name = "VOID"
+		_: expedition_variant_name = "MONO"
+
+	# Boss durability and tempo scale with expedition depth independently of the
+	# global run clock, so a fast explorer cannot trivialize later Hives.
+	var depth := expedition_variant - 1
+	max_health = 84 + depth * 28
+	health = max_health
+	move_speed = 42.0 + float(depth) * 3.5
+	_shot_time = maxf(0.85, 2.0 - float(depth) * 0.18)
+	_lay_time = maxf(2.8, 4.2 - float(depth) * 0.25)
+
+func _apply_expedition_variant() -> void:
+	if animated_sprite == null:
+		return
+	if expedition_variant <= 1:
+		animated_sprite.material = null
+		return
+
+	var tint := Color.WHITE
+	var glow := Color(0.35, 1.20, 0.30, 1.0)
+	match expedition_variant:
+		2:
+			tint = Color(1.45, 0.92, 0.34, 1.0)
+			glow = Color(1.80, 0.72, 0.16, 1.0)
+		3:
+			tint = Color(0.38, 1.28, 1.55, 1.0)
+			glow = Color(0.20, 1.55, 1.75, 1.0)
+		4:
+			tint = Color(1.05, 0.48, 1.55, 1.0)
+			glow = Color(0.86, 0.22, 1.75, 1.0)
+		5:
+			tint = Color(1.42, 1.42, 1.50, 1.0)
+			glow = Color(1.65, 0.28, 0.32, 1.0)
+
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+render_mode unshaded;
+uniform vec4 variant_tint : source_color = vec4(1.0);
+uniform vec4 variant_glow : source_color = vec4(1.0);
+uniform float tint_strength = 0.52;
+uniform float pulse_speed = 2.4;
+void fragment() {
+	vec4 tex = texture(TEXTURE, UV);
+	if (tex.a < 0.01) { discard; }
+	float lum = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+	vec3 tinted = mix(tex.rgb, tex.rgb * variant_tint.rgb, tint_strength);
+	float pulse = 0.5 + 0.5 * sin(TIME * pulse_speed + UV.y * 18.0);
+	float hot = smoothstep(0.58, 1.0, lum) * (0.08 + pulse * 0.10);
+	tinted += variant_glow.rgb * hot;
+	COLOR = vec4(tinted, tex.a) * COLOR;
+}
+"""
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	material.set_shader_parameter("variant_tint", tint)
+	material.set_shader_parameter("variant_glow", glow)
+	material.set_shader_parameter("tint_strength", 0.48 + float(expedition_variant - 2) * 0.05)
+	material.set_shader_parameter("pulse_speed", 2.1 + float(expedition_variant) * 0.18)
+	animated_sprite.material = material
+
 
 func _physics_process(delta: float) -> void:
 	_update_depth_order()
@@ -505,4 +577,10 @@ func _draw() -> void:
 	var y := -62.0
 	draw_rect(Rect2(Vector2(-width * 0.5 - 1.0, y - 1.0), Vector2(width + 2.0, 5.0)), Color(0.015, 0.02, 0.025, 0.95), true)
 	draw_rect(Rect2(Vector2(-width * 0.5, y), Vector2(width, 3.0)), Color(0.20, 0.04, 0.08, 1.0), true)
-	draw_rect(Rect2(Vector2(-width * 0.5, y), Vector2(maxf(1.0, width * ratio), 3.0)), Color(0.42, 1.0, 0.24, 1.0), true)
+	var health_color := Color(0.42, 1.0, 0.24, 1.0)
+	match expedition_variant:
+		2: health_color = Color(1.0, 0.68, 0.18, 1.0)
+		3: health_color = Color(0.30, 0.94, 1.0, 1.0)
+		4: health_color = Color(0.85, 0.34, 1.0, 1.0)
+		5: health_color = Color(1.0, 0.36, 0.40, 1.0)
+	draw_rect(Rect2(Vector2(-width * 0.5, y), Vector2(maxf(1.0, width * ratio), 3.0)), health_color, true)

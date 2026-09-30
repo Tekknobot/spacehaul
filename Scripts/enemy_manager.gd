@@ -43,6 +43,9 @@ var _omega_carrier: SpacehaulEnemy
 var _omega_carrier_pending := false
 var _omega_carrier_timer := 0.0
 var _omega_core_in_world := false
+# Expedition mode awards at most one OMEGA opportunity on Decks 1-3.
+# Claimed deck ids persist across procedural deck regeneration for the run.
+var _expedition_omega_claimed_decks: Dictionary = {}
 
 # Encounter-director state. Ordinary population refill happens in same-species
 # packs; the event layer periodically creates a more legible swarm from one,
@@ -102,6 +105,7 @@ func reset_run() -> void:
 	_omega_carrier_pending = false
 	_omega_carrier_timer = 0.0
 	_omega_core_in_world = false
+	_expedition_omega_claimed_decks.clear()
 	_spawning_enabled = true
 	_broodmother_spawned = false
 	_clear_boss_encounter()
@@ -141,6 +145,9 @@ func _on_deck_regenerated(_spawn: Vector2, seed_value: int) -> void:
 	var run_time := _get_run_time()
 	_rng.seed = seed_value ^ 0xE11E5 ^ int(run_time * 10.0)
 	_clear_population()
+	if expedition_boss_controlled:
+		_clear_boss_encounter()
+		_broodmother_spawned = false
 	_cancel_swarm_event()
 	_deck_grace = 5.0
 	_spawn_timer = 0.6
@@ -185,7 +192,7 @@ func _cleanup_dead_references() -> void:
 # -----------------------------------------------------------------------------
 
 func _update_omega_carrier_director(delta: float, run_time: float) -> void:
-	if not omega_core_drops_enabled or run_time < _next_omega_core_time:
+	if not omega_core_drops_enabled or not _omega_window_is_open(run_time):
 		return
 	if _omega_core_in_world or _has_omega_core_pickup():
 		_omega_core_in_world = true
@@ -530,6 +537,8 @@ func _swarm_size(run_time: float, enemy_type: String) -> int:
 	else:
 		amount = _rng.randi_range(20, 27)
 
+	# Deeper decks add a modest event budget independent of elapsed time.
+	amount += maxi(0, _get_deck_number() - 1) * 2
 	if enemy_type == "bug_4":
 		amount = maxi(8, int(round(float(amount) * 0.60)))
 	return amount
@@ -584,13 +593,13 @@ func _spawn_enemy_at(spawn_position: Vector2, enemy_type: String, run_time: floa
 	enemies.append(enemy)
 	return enemy
 
-func spawn_broodmother_at(world_position: Vector2) -> void:
+func spawn_broodmother_at(world_position: Vector2, expedition_variant: int = 1) -> void:
 	if _broodmother_spawned or is_boss_active():
 		return
 	_cancel_swarm_event()
-	_spawn_broodmother(world_position)
+	_spawn_broodmother(world_position, expedition_variant)
 
-func _spawn_broodmother(forced_position: Vector2 = Vector2.ZERO) -> void:
+func _spawn_broodmother(forced_position: Vector2 = Vector2.ZERO, expedition_variant: int = 1) -> void:
 	if deck == null:
 		return
 	var player := get_tree().get_first_node_in_group("player_mecha") as MechaController
@@ -613,6 +622,7 @@ func _spawn_broodmother(forced_position: Vector2 = Vector2.ZERO) -> void:
 		return
 	boss.deck = deck
 	boss.position = spawn_position.round()
+	boss.configure_expedition_variant(expedition_variant)
 	add_child(boss)
 	boss.defeated.connect(_on_broodmother_defeated)
 	_broodmother = boss
@@ -655,12 +665,12 @@ func _on_broodmother_defeated() -> void:
 	if _broodmother != null and is_instance_valid(_broodmother):
 		boss_position = _broodmother.global_position
 	_broodmother = null
-	# The boss may satisfy a Core hunt only when the next scheduled OMEGA window is
-	# already live. This prevents the Broodmother from accidentally granting the
-	# third Core early simply because the player killed it before ~09:00.
+	# A boss can satisfy the currently active OMEGA opportunity. In Expedition
+	# Mode that opportunity is deck-driven (Decks 1-3 after the first secured
+	# system); in Survival Mode it retains the original clock-driven window.
 	if (
 		boss_position != Vector2.ZERO
-		and _get_run_time() >= _next_omega_core_time
+		and _omega_window_is_open(_get_run_time())
 		and not _omega_core_in_world
 		and _omega_carrier == null
 		and _omega_seek_is_active()
@@ -725,23 +735,25 @@ func _pack_size_for_type(enemy_type: String, run_time: float) -> int:
 	return maxi(1, amount)
 
 func _target_active_count(run_time: float) -> int:
-	# The baseline is intentionally lower than the temporary event ceiling. That
-	# creates the survivor-game rhythm of pressure -> swarm peak -> cleanup,
-	# instead of maintaining the maximum density every second of the run.
+	# Expedition depth now matters from the moment a new deck begins. Time still
+	# increases pressure, while each deeper deck adds a persistent population step.
+	var baseline := 5
 	if run_time < 30.0:
-		return 5
-	if run_time < 60.0:
-		return 8
-	if run_time < 90.0:
-		return 11
-	if run_time < 120.0:
-		return 14
-	if run_time < 180.0:
-		return 19
-	if run_time < 240.0:
-		return 24
-	var scaled := 24 + int((run_time - 240.0) / 20.0) + (_get_deck_number() - 1) * 3
-	return clampi(scaled, 24, 72)
+		baseline = 5
+	elif run_time < 60.0:
+		baseline = 8
+	elif run_time < 90.0:
+		baseline = 11
+	elif run_time < 120.0:
+		baseline = 14
+	elif run_time < 180.0:
+		baseline = 19
+	elif run_time < 240.0:
+		baseline = 24
+	else:
+		baseline = 24 + int((run_time - 240.0) / 20.0)
+	baseline += maxi(0, _get_deck_number() - 1) * 3
+	return clampi(baseline, 5, 72)
 
 func _spawn_interval(run_time: float) -> float:
 	# Packs replace the old single-enemy drip feed, so ordinary refill can be a
@@ -784,9 +796,44 @@ func notify_omega_core_collected() -> void:
 	_omega_core_in_world = false
 	_omega_carrier_pending = false
 	_omega_carrier_timer = 0.0
-	# Each collected Core arms the next hunt rather than permanently exhausting
-	# the director. Default pacing is roughly 03:00, 06:00 and 09:00.
+
+	if _is_expedition_omega_mode():
+		# One Core opportunity per expedition deck, specifically Decks 1-3. Once
+		# collected, this deck cannot immediately produce another carrier/Core.
+		var deck_number := _get_deck_number()
+		if deck_number >= 1 and deck_number <= 3:
+			_expedition_omega_claimed_decks[deck_number] = true
+		return
+
+	# Classic survival mode keeps the original clock-driven three-Core pacing.
 	_next_omega_core_time = _get_run_time() + omega_core_interval
+
+func _is_expedition_omega_mode() -> bool:
+	var managers := get_tree().get_nodes_in_group("survival_manager")
+	if managers.is_empty():
+		return false
+	if managers[0].has_method("is_expedition_mode"):
+		return bool(managers[0].call("is_expedition_mode"))
+	return false
+
+func _omega_window_is_open(run_time: float) -> bool:
+	if _is_expedition_omega_mode():
+		var deck_number := _get_deck_number()
+		if deck_number < 1 or deck_number > 3:
+			return false
+		if _expedition_omega_claimed_decks.has(deck_number):
+			return false
+
+		# The first secured ship system is the trigger. This makes the OMEGA hunt
+		# part of exploration rather than something that appears just for waiting.
+		var managers := get_tree().get_nodes_in_group("survival_manager")
+		if managers.is_empty():
+			return false
+		if managers[0].has_method("is_expedition_omega_ready"):
+			return bool(managers[0].call("is_expedition_omega_ready"))
+		return false
+
+	return run_time >= _next_omega_core_time
 
 func get_omega_guidance_target() -> Node2D:
 	if _omega_carrier != null and is_instance_valid(_omega_carrier) and not _omega_carrier.is_queued_for_deletion():

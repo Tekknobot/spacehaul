@@ -793,9 +793,10 @@ func _update_omega_carrier_vfx(delta: float) -> void:
 
 func apply_difficulty(run_time: float, deck_number: int, make_elite: bool = false) -> void:
 	var phase := maxi(0, int(floor(run_time / 180.0)))
-	health += mini(5, phase)
-	move_speed *= minf(1.34, 1.0 + run_time / 2400.0 + float(maxi(0, deck_number - 1)) * 0.025)
-	attack_cooldown *= maxf(0.62, 1.0 - run_time / 3200.0)
+	var deck_depth := maxi(0, deck_number - 1)
+	health += mini(5, phase) + int(floor(float(deck_depth + 1) * 0.75))
+	move_speed *= minf(1.40, 1.0 + run_time / 2400.0 + float(deck_depth) * 0.035)
+	attack_cooldown *= maxf(0.56, 1.0 - run_time / 3200.0 - float(deck_depth) * 0.035)
 
 	match enemy_type:
 		"alien_1", "bug_1", "bug_2", "spider_1": salvage_value = 1

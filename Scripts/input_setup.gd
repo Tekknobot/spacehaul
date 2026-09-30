@@ -84,8 +84,9 @@ static func ensure_actions() -> void:
 	# Runtime deck/palette test. Press P repeatedly to cycle 1 -> 2 -> 3 -> 4 -> 5 -> 1.
 	_add_key("cycle_deck_cheat", KEY_P)
 
-	# Survival HUD is now persistent. Keep the action registered for compatibility,
-	# but TAB is intentionally not required for core run information.
+	# Expedition map is optional during combat; TAB toggles it without hiding the
+	# persistent top HUD.
+	_add_key("toggle_ui", KEY_TAB)
 
 static func _add_action(action: StringName, deadzone: float = 0.2) -> void:
 	if not InputMap.has_action(action):

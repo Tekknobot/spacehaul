@@ -10,6 +10,7 @@ const RUN_DURATION := 20.0 * 60.0
 const DECK_DURATION := 4.0 * 60.0
 const SECONDARY_UNLOCK_TIME := 60.0
 const EXPEDITION_OBJECTIVE_ROLES := ["ARMORY", "REPAIR BAY", "DATA CACHE", "REACTOR"]
+const EXPEDITION_DECK_COUNT := 5
 
 @export_category("Expedition Prototype")
 @export var expedition_mode := true
@@ -87,6 +88,7 @@ var _expedition_secure_progress := 0.0
 var _expedition_boss_started := false
 var _expedition_boss_defeated := false
 var _expedition_extraction_unlocked := false
+var _expedition_map_visible := false
 var _damage_overlay: ColorRect
 var _damage_material: ShaderMaterial
 var _damage_intensity := 0.0
@@ -214,6 +216,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 
+	# Expedition map is intentionally opt-in so the upper-right playfield stays
+	# unobstructed during combat. TAB toggles the complete fog-of-war panel.
+	if expedition_mode and event.is_action_pressed("toggle_ui"):
+		_toggle_expedition_map()
+		get_viewport().set_input_as_handled()
+		return
+
 	var omega_open := _omega_overlay != null and _omega_overlay.visible
 	var upgrade_open := _upgrade_overlay != null and _upgrade_overlay.visible
 	if not omega_open and not upgrade_open:
@@ -238,6 +247,19 @@ func get_run_time() -> float:
 func get_deck_number() -> int:
 	return _deck_number
 
+func is_expedition_mode() -> bool:
+	return expedition_mode
+
+func is_expedition_omega_ready() -> bool:
+	# Decks 1-3 each contain one OMEGA opportunity, activated by securing the
+	# first objective on that deck. Later decks intentionally add no new Core.
+	return (
+		expedition_mode
+		and _deck_number >= 1
+		and _deck_number <= 3
+		and _expedition_completed.size() >= 1
+	)
+
 func get_salvage_magnet_radius() -> float:
 	return _salvage_magnet_radius
 
@@ -259,6 +281,8 @@ func can_receive_omega_core() -> bool:
 
 func is_omega_seek_active() -> bool:
 	if _game_over or _run_complete or _omega_core_stored or _menu_open:
+		return false
+	if expedition_mode and not is_expedition_omega_ready():
 		return false
 	var active := mecha_manager.get_active_mecha()
 	return active != null and active.can_accept_omega_mutation()
@@ -812,6 +836,8 @@ func _start_selected_run() -> void:
 	_omega_core_stored = false
 	if _omega_overlay != null:
 		_omega_overlay.hide()
+	if expedition_mode:
+		deck.configure_for_expedition_deck(_deck_number)
 	deck.set_deck_palette(_deck_number)
 	deck.generate_new_level()
 	mecha_manager.start_new_run_with_mecha(_selected_mecha_id)
@@ -861,6 +887,8 @@ func _apply_video_capture_state() -> void:
 
 	_secondary_announced = _run_time >= SECONDARY_UNLOCK_TIME
 
+	if expedition_mode:
+		deck.configure_for_expedition_deck(_deck_number)
 	deck.set_deck_palette(_deck_number)
 	deck.generate_new_level()
 
@@ -989,7 +1017,7 @@ func _apply_video_capture_omega(active: MechaController, capture_minutes: float)
 		granted += 1
 
 # -----------------------------------------------------------------------------
-# Single-deck expedition prototype
+# Multi-deck expedition prototype
 # -----------------------------------------------------------------------------
 
 func _reset_expedition_state() -> void:
@@ -1000,6 +1028,9 @@ func _reset_expedition_state() -> void:
 	_expedition_boss_started = false
 	_expedition_boss_defeated = false
 	_expedition_extraction_unlocked = false
+	_expedition_map_visible = false
+	if _expedition_panel != null:
+		_expedition_panel.hide()
 	_refresh_expedition_map_data()
 
 	if _expedition_minimap != null:
@@ -1010,7 +1041,7 @@ func _reset_expedition_state() -> void:
 		_expedition_minimap.set_player_cell(spawn_cell)
 		_expedition_minimap.reveal_around(spawn_cell, 4)
 	_update_expedition_status()
-	_show_banner("EXPEDITION START   //   SECURE FOUR DECK SYSTEMS", 2.8)
+	_show_banner("DECK %d/%d   //   EXPLORE + SECURE 4 SYSTEMS   //   TAB MAP" % [_deck_number, EXPEDITION_DECK_COUNT], 2.8)
 
 func _refresh_expedition_map_data() -> void:
 	if not expedition_mode or _expedition_minimap == null or deck == null:
@@ -1027,6 +1058,11 @@ func _refresh_expedition_map_data() -> void:
 		Vector2i(deck.grid_width, deck.grid_height),
 		deck.get_walkable_cells()
 	)
+
+func _expedition_secure_time() -> float:
+	# Later decks ask the player to hold dangerous rooms slightly longer, creating
+	# difficulty from positioning without turning objectives into long wait bars.
+	return expedition_secure_seconds + float(maxi(0, _deck_number - 1)) * 0.18
 
 func _update_expedition(delta: float) -> void:
 	if not expedition_mode or _game_over or _run_complete:
@@ -1062,14 +1098,19 @@ func _update_expedition(delta: float) -> void:
 			_expedition_secure_role = role
 			_expedition_secure_progress = 0.0
 		_expedition_secure_progress += delta
-		if _expedition_secure_progress >= expedition_secure_seconds:
+		if _expedition_secure_progress >= _expedition_secure_time():
 			_complete_expedition_objective(role)
 	elif role == "HIVE":
 		if _expedition_completed.size() >= EXPEDITION_OBJECTIVE_ROLES.size() and not _expedition_boss_started and not _expedition_boss_defeated:
 			_start_expedition_boss()
 	elif role == "EXTRACTION" and _expedition_extraction_unlocked:
-		_show_banner("EXTRACTION CONFIRMED", 1.2)
-		_complete_run()
+		if not _deck_transition_active:
+			if _deck_number >= EXPEDITION_DECK_COUNT:
+				_show_banner("FINAL EXTRACTION CONFIRMED", 1.2)
+				_complete_run()
+			else:
+				_show_banner("EXTRACTION CONFIRMED   //   DESCENDING", 1.2)
+				_advance_expedition_deck()
 
 	_update_expedition_status()
 
@@ -1145,8 +1186,11 @@ func _start_expedition_boss() -> void:
 		return
 	_expedition_boss_started = true
 	var boss_position: Vector2 = hive.get("center_world", Vector2.ZERO)
-	enemy_manager.spawn_broodmother_at(boss_position)
-	_show_banner("HIVE BREACH   //   BROODMOTHER ENGAGED", 2.6)
+	enemy_manager.spawn_broodmother_at(boss_position, _deck_number)
+	_show_banner(
+		"HIVE BREACH   //   BROODMOTHER %s" % deck.get_deck_palette_name(_deck_number),
+		2.6
+	)
 
 func _on_expedition_broodmother_defeated() -> void:
 	if not expedition_mode:
@@ -1155,28 +1199,116 @@ func _on_expedition_broodmother_defeated() -> void:
 	_expedition_extraction_unlocked = true
 	if _expedition_minimap != null:
 		_expedition_minimap.set_expedition_state(false, true)
-	_show_banner("BROODMOTHER ELIMINATED   //   EXTRACTION ONLINE", 3.2)
+	_show_banner("BROODMOTHER ELIMINATED   //   DECK %d EXTRACTION ONLINE" % _deck_number, 3.2)
 	_update_expedition_status()
 
 func _update_expedition_status() -> void:
 	if _expedition_status == null or not expedition_mode:
 		return
 	if _expedition_extraction_unlocked:
-		_expedition_status.text = "EXTRACTION ONLINE\nRETURN TO EVAC ROOM"
+		_expedition_status.text = "DECK %d/%d   EXTRACTION ONLINE\nRETURN TO EVAC ROOM" % [_deck_number, EXPEDITION_DECK_COUNT]
 		return
 	if enemy_manager.is_boss_active():
-		_expedition_status.text = "FINAL OBJECTIVE\nELIMINATE BROODMOTHER"
+		_expedition_status.text = "DECK %d/%d   FINAL OBJECTIVE\nELIMINATE BROODMOTHER" % [_deck_number, EXPEDITION_DECK_COUNT]
 		return
 	if _expedition_completed.size() >= EXPEDITION_OBJECTIVE_ROLES.size():
-		_expedition_status.text = "OBJECTIVES 4/4\nLOCATE THE HIVE"
+		_expedition_status.text = "DECK %d/%d   OBJECTIVES 4/4\nLOCATE THE HIVE" % [_deck_number, EXPEDITION_DECK_COUNT]
 		return
 	if not _expedition_secure_role.is_empty():
-		var percent := int(round(clampf(_expedition_secure_progress / maxf(0.01, expedition_secure_seconds), 0.0, 1.0) * 100.0))
-		_expedition_status.text = "SECURING %s   %d%%\nOBJECTIVES %d/%d" % [
-			_expedition_secure_role, percent, _expedition_completed.size(), EXPEDITION_OBJECTIVE_ROLES.size()
+		var percent := int(round(clampf(_expedition_secure_progress / maxf(0.01, _expedition_secure_time()), 0.0, 1.0) * 100.0))
+		_expedition_status.text = "DECK %d/%d   SECURING %s   %d%%\nOBJECTIVES %d/%d" % [
+			_deck_number, EXPEDITION_DECK_COUNT, _expedition_secure_role, percent,
+			_expedition_completed.size(), EXPEDITION_OBJECTIVE_ROLES.size()
 		]
 		return
-	_expedition_status.text = "EXPLORE DECK\nOBJECTIVES %d/%d" % [_expedition_completed.size(), EXPEDITION_OBJECTIVE_ROLES.size()]
+	_expedition_status.text = "DECK %d/%d   EXPLORE\nOBJECTIVES %d/%d" % [
+		_deck_number, EXPEDITION_DECK_COUNT, _expedition_completed.size(), EXPEDITION_OBJECTIVE_ROLES.size()
+	]
+
+
+func _advance_expedition_deck() -> void:
+	if not expedition_mode or _deck_transition_active or _game_over or _run_complete:
+		return
+	if _deck_number >= EXPEDITION_DECK_COUNT:
+		_complete_run()
+		return
+
+	var active := mecha_manager.get_active_mecha()
+	if active == null:
+		return
+
+	_deck_transition_active = true
+	enemy_manager.set_spawning_enabled(false)
+	get_tree().paused = true
+	active.begin_deck_transition()
+	SFX.play_ui(self, "boost", -12.5, 0.78)
+
+	var out_tween := create_tween()
+	out_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	out_tween.set_parallel(true)
+	out_tween.tween_method(Callable(active, "set_deck_transition_amount"), 0.0, 1.0, 0.64).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	out_tween.tween_method(Callable(active, "set_transition_camera_zoom"), 1.0, 1.22, 0.64).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	out_tween.tween_method(Callable(self, "_set_deck_transition_overlay_amount"), 0.0, 0.78, 0.64).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	if _top_hud != null:
+		out_tween.tween_property(_top_hud, "modulate:a", 0.18, 0.34)
+	await out_tween.finished
+
+	_deck_number += 1
+	deck.configure_for_expedition_deck(_deck_number)
+	deck.set_deck_palette(_deck_number)
+	deck.generate_new_level()
+	_reset_expedition_state()
+
+	active = mecha_manager.get_active_mecha()
+	if active != null:
+		# Carry the build forward, but give a small between-deck service repair.
+		active.repair_hull(maxi(10, int(round(float(active.get_max_hull()) * 0.18))))
+		active.prepare_deck_materialize()
+		active.set_transition_camera_zoom(1.22)
+		active.set_deck_transition_scale(0.0)
+
+	_set_deck_transition_overlay_amount(0.94)
+	SFX.play_ui(self, "boost", -14.0, 1.12)
+	_show_banner(
+		"DECK %d/%d   %s   //   %dx%d GRID" % [
+			_deck_number,
+			EXPEDITION_DECK_COUNT,
+			deck.get_deck_palette_name(_deck_number),
+			deck.grid_width,
+			deck.grid_height
+		],
+		2.8
+	)
+
+	var in_tween := create_tween()
+	in_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	in_tween.set_parallel(true)
+	if active != null:
+		in_tween.tween_method(Callable(active, "set_deck_transition_amount"), 1.0, 0.0, 0.76).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		in_tween.tween_method(Callable(active, "set_transition_camera_zoom"), 1.22, 1.0, 0.92).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		in_tween.tween_method(Callable(active, "set_deck_transition_scale"), 0.0, 1.0, 0.76).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	in_tween.tween_method(Callable(self, "_set_deck_transition_overlay_amount"), 0.94, 0.0, 0.84).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	if _top_hud != null:
+		in_tween.tween_property(_top_hud, "modulate:a", 1.0, 0.52)
+	await in_tween.finished
+
+	if active != null:
+		active.end_deck_transition()
+	_set_deck_transition_overlay_amount(0.0)
+	get_tree().paused = false
+	enemy_manager.set_spawning_enabled(true)
+	_deck_transition_active = false
+	_update_hud()
+
+
+func _toggle_expedition_map() -> void:
+	if not expedition_mode or _expedition_panel == null or not _hud_visible or get_tree().paused:
+		return
+	_expedition_map_visible = not _expedition_map_visible
+	_expedition_panel.visible = _expedition_map_visible
+	if _expedition_map_visible:
+		_show_banner("DECK MAP OPEN   //   TAB CLOSE", 0.75)
+
 
 
 func _on_deck_regenerated(_new_spawn: Vector2, new_seed: int) -> void:
@@ -1565,7 +1697,7 @@ func _build_expedition_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "DECK MAP   //   FOG LINK"
+	title.text = "DECK MAP   //   TAB CLOSE"
 	title.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
 	title.add_theme_font_size_override("font_size", 10)
 	title.add_theme_color_override("font_color", Color(0.68, 0.90, 0.94, 1.0))
@@ -1649,7 +1781,7 @@ func _set_standard_hud_visible(value: bool) -> void:
 	if _top_hud != null:
 		_top_hud.visible = value
 	if _expedition_panel != null:
-		_expedition_panel.visible = value and expedition_mode
+		_expedition_panel.visible = value and expedition_mode and _expedition_map_visible
 	if not value and _event_feed != null:
 		if _event_feed_tween != null and _event_feed_tween.is_valid():
 			_event_feed_tween.kill()
@@ -1806,9 +1938,11 @@ func _show_run_summary(completed: bool) -> void:
 		chassis = "MECHA"
 	if expedition_mode:
 		_run_summary_title.text = "EXTRACTION COMPLETE" if completed else "GAME OVER   //   MECHA LOST"
-		_run_summary_text.text = "%s   %s\nOBJECTIVES  %d/%d\nKILLS       %03d\nLEVEL       %02d\nCHASSIS     %s" % [
+		_run_summary_text.text = "%s   %s\nDECKS       %d/%d\nOBJECTIVES  %d/%d\nKILLS       %03d\nLEVEL       %02d\nCHASSIS     %s" % [
 			"EXPEDITION" if completed else "SURVIVED",
 			_format_time(_run_time),
+			_deck_number,
+			EXPEDITION_DECK_COUNT,
 			_expedition_completed.size(),
 			EXPEDITION_OBJECTIVE_ROLES.size(),
 			enemy_manager.get_total_kills(),
