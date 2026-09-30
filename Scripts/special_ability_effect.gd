@@ -24,6 +24,9 @@ var impact_scale := 1.0
 var primary_tier := 0
 var secondary_tier := 0
 var legendary_mutation := ""
+# Showroom mode reuses the real ability renderer inside a paused SubViewport.
+# It disables combat queries/audio while preserving the authored VFX/timing.
+var preview_mode := false
 var root: Node
 var _rng := RandomNumberGenerator.new()
 
@@ -117,7 +120,7 @@ func _run() -> void:
 	queue_free()
 
 func _sleep(seconds: float) -> void:
-	await get_tree().create_timer(maxf(seconds, 0.001), false).timeout
+	await get_tree().create_timer(maxf(seconds, 0.001), preview_mode).timeout
 
 func _particle_profile() -> String:
 	match mecha_id:
@@ -295,11 +298,13 @@ func _dotted_trace(from: Vector2, to: Vector2, core: Color, glow: Color, spacing
 func _explode(at: Vector2, core: Color = Color(3.0, 1.5, 0.45, 1.0), glow: Color = Color(1.6, 0.45, 0.1, 1.0), radius: float = 18.0, hit_radius: float = 16.0) -> void:
 	var fx := ExplosionScript.new() as SpacehaulSpecialExplosion
 	root.add_child(fx)
-	fx.setup(at.round(), core, glow, radius * impact_scale)
+	fx.setup(at.round(), core, glow, radius * impact_scale, 0.28, not preview_mode)
 	_spawn_impact_particles(at, core, glow, radius * impact_scale)
 	_damage_radius(at, hit_radius * impact_scale, (at - owner_ground).normalized())
 
 func _damage_radius(at: Vector2, radius: float, push_dir: Vector2) -> void:
+	if preview_mode:
+		return
 	if get_world_2d() == null:
 		return
 	var shape := CircleShape2D.new()
@@ -320,6 +325,8 @@ func _damage_radius(at: Vector2, radius: float, push_dir: Vector2) -> void:
 		collider.call("take_projectile_hit", push_dir)
 
 func _radial_hit(at: Vector2, radius: float, outward: bool = true) -> void:
+	if preview_mode:
+		return
 	if get_world_2d() == null:
 		return
 	var shape := CircleShape2D.new()
@@ -390,6 +397,8 @@ func _trajectory_contact_fx(at: Vector2, radius: float = 7.0) -> void:
 
 
 func _damage_line(from: Vector2, to: Vector2, radius: float = 5.0) -> void:
+	if preview_mode:
+		return
 	if get_world_2d() == null:
 		return
 
@@ -568,6 +577,8 @@ func _nearest_unused_enemy(
 	max_owner_range: float,
 	excluded_ids: Dictionary
 ) -> Node2D:
+	if preview_mode:
+		return null
 	var best: Node2D = null
 	var best_distance_sq := search_radius * search_radius
 
@@ -660,6 +671,9 @@ func _jagged_segment_points(from: Vector2, to: Vector2, jitter: float = 4.0) -> 
 func _chain_enemy_points(max_hops: int, first_range: float, jump_range: float) -> PackedVector2Array:
 	var points := PackedVector2Array()
 	points.append(origin.round())
+	if preview_mode:
+		points.append(target.round())
+		return points
 	var used: Array[Node] = []
 	var cursor := origin
 	for hop in range(max_hops):
@@ -937,7 +951,7 @@ func _ability_impact_fx(
 		glow,
 		radius * impact_scale,
 		0.28,
-		play_sound
+		play_sound and not preview_mode
 	)
 
 	_spawn_impact_particles(
@@ -1864,6 +1878,8 @@ func _nearest_unused_enemy_from_point(
 	search_radius: float,
 	excluded_ids: Dictionary
 ) -> Node2D:
+	if preview_mode:
+		return null
 	var best: Node2D = null
 	var best_distance_sq := search_radius * search_radius
 

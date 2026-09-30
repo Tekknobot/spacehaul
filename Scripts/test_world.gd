@@ -2,6 +2,8 @@ extends Node2D
 
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
 const SFX = preload("res://Scripts/sound_fx.gd")
+const MECHA_SCENE = preload("res://Scenes/mecha.tscn")
+const SpecialAbilityScript = preload("res://Scripts/special_ability_effect.gd")
 
 const RUN_DURATION := 20.0 * 60.0
 const DECK_DURATION := 4.0 * 60.0
@@ -79,13 +81,21 @@ var _deck_transition_overlay: ColorRect
 var _deck_transition_overlay_material: ShaderMaterial
 
 var _mecha_select_overlay: Control
-var _mecha_select_preview: TextureRect
 var _mecha_select_name: Label
 var _mecha_select_primary: Label
 var _mecha_select_secondary: Label
 var _mecha_select_status: Label
 var _mecha_select_deploy: Button
-var _mecha_select_buttons: Array[Button] = []
+var _mecha_select_prev_label: Label
+var _mecha_select_next_label: Label
+var _showroom_demo_label: Label
+var _showroom_viewport: SubViewport
+var _showroom_stage: Node2D
+var _showroom_fx_root: Node2D
+var _showroom_mecha: MechaController
+var _showroom_demo_state := 0
+var _showroom_demo_timer := 0.0
+var _showroom_active := false
 var _selected_mecha_id := "M1"
 var _menu_open := false
 
@@ -93,6 +103,8 @@ func _enter_tree() -> void:
 	add_to_group("survival_manager")
 
 func _ready() -> void:
+	# The showroom must keep animating while the gameplay tree is paused.
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	InputSetupScript.ensure_actions()
 	_rng.randomize()
 	deck.regenerated.connect(_on_deck_regenerated)
@@ -126,6 +138,7 @@ func _process(delta: float) -> void:
 	_update_omega_guidance()
 
 	if _menu_open:
+		_update_mecha_showroom(delta)
 		return
 
 	# Developer palette/deck test. P performs the real cinematic transfer but
@@ -157,6 +170,23 @@ func _process(delta: float) -> void:
 	_update_hud()
 
 func _unhandled_input(event: InputEvent) -> void:
+	# The showroom uses the same left/right language as gameplay movement, but only
+	# while the full-screen selector is active. ENTER / gamepad A deploys the
+	# currently centered chassis; mouse users can click the arrows or DEPLOY.
+	if _showroom_active and _mecha_select_overlay != null and _mecha_select_overlay.visible:
+		if event is InputEventKey:
+			var menu_key := event as InputEventKey
+			if menu_key.pressed and not menu_key.echo and (menu_key.keycode == KEY_ENTER or menu_key.keycode == KEY_KP_ENTER):
+				_start_selected_run()
+				get_viewport().set_input_as_handled()
+				return
+		if event is InputEventJoypadButton:
+			var menu_button := event as InputEventJoypadButton
+			if menu_button.pressed and menu_button.button_index == JOY_BUTTON_A:
+				_start_selected_run()
+				get_viewport().set_input_as_handled()
+				return
+
 	var omega_open := _omega_overlay != null and _omega_overlay.visible
 	var upgrade_open := _upgrade_overlay != null and _upgrade_overlay.visible
 	if not omega_open and not upgrade_open:
@@ -313,165 +343,256 @@ func _restart_run() -> void:
 
 func _build_mecha_select_overlay() -> void:
 	_mecha_select_overlay = ColorRect.new()
-	_mecha_select_overlay.name = "MechaSelect"
+	_mecha_select_overlay.name = "MechaShowroom"
 	_mecha_select_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_mecha_select_overlay.color = Color(0.006, 0.011, 0.018, 0.97)
+	_mecha_select_overlay.color = Color(0.004, 0.008, 0.014, 0.985)
 	_mecha_select_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_mecha_select_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
 	_mecha_select_overlay.z_index = 2000
 	hud.add_child(_mecha_select_overlay)
 
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_mecha_select_overlay.add_child(center)
-
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(608.0, 334.0)
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.014, 0.022, 0.032, 0.98)
-	panel_style.border_width_left = 1
-	panel_style.border_width_top = 1
-	panel_style.border_width_right = 1
-	panel_style.border_width_bottom = 1
-	panel_style.border_color = Color(0.20, 0.62, 0.70, 0.90)
-	panel_style.corner_radius_top_left = 4
-	panel_style.corner_radius_top_right = 4
-	panel_style.corner_radius_bottom_left = 4
-	panel_style.corner_radius_bottom_right = 4
-	panel.add_theme_stylebox_override("panel", panel_style)
-	center.add_child(panel)
-
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 18)
-	margin.add_theme_constant_override("margin_top", 12)
-	margin.add_theme_constant_override("margin_right", 18)
-	margin.add_theme_constant_override("margin_bottom", 12)
-	panel.add_child(margin)
+	var outer_margin := MarginContainer.new()
+	outer_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	outer_margin.add_theme_constant_override("margin_left", 18)
+	outer_margin.add_theme_constant_override("margin_top", 9)
+	outer_margin.add_theme_constant_override("margin_right", 18)
+	outer_margin.add_theme_constant_override("margin_bottom", 8)
+	_mecha_select_overlay.add_child(outer_margin)
 
 	var root_box := VBoxContainer.new()
-	root_box.add_theme_constant_override("separation", 5)
-	margin.add_child(root_box)
+	root_box.add_theme_constant_override("separation", 1)
+	root_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	outer_margin.add_child(root_box)
 
 	var title := Label.new()
 	title.text = "SPACEMECHA"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_override("font", load("res://Fonts/mago3.ttf") as Font)
-	title.add_theme_font_size_override("font_size", 42)
-	title.add_theme_color_override("font_color", Color(0.70, 0.95, 1.0, 1.0))
+	title.add_theme_font_size_override("font_size", 32)
+	title.add_theme_color_override("font_color", Color(0.72, 0.96, 1.0, 1.0))
 	root_box.add_child(title)
 
 	var subtitle := Label.new()
-	subtitle.text = "SURVIVAL EXTRACTION   //   SELECT MECHA"
+	subtitle.text = "CHASSIS SHOWROOM   //   LIVE SYSTEM PREVIEW"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	subtitle.add_theme_font_size_override("font_size", 14)
-	subtitle.add_theme_color_override("font_color", Color(0.46, 0.65, 0.72, 1.0))
+	subtitle.add_theme_font_size_override("font_size", 11)
+	subtitle.add_theme_color_override("font_color", Color(0.38, 0.59, 0.66, 1.0))
 	root_box.add_child(subtitle)
-
-	var body := HBoxContainer.new()
-	body.add_theme_constant_override("separation", 12)
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root_box.add_child(body)
-
-	var preview_panel := PanelContainer.new()
-	preview_panel.custom_minimum_size = Vector2(176.0, 198.0)
-	var preview_style := StyleBoxFlat.new()
-	preview_style.bg_color = Color(0.010, 0.017, 0.026, 0.94)
-	preview_style.border_width_left = 1
-	preview_style.border_width_top = 1
-	preview_style.border_width_right = 1
-	preview_style.border_width_bottom = 1
-	preview_style.border_color = Color(0.12, 0.30, 0.35, 0.9)
-	preview_panel.add_theme_stylebox_override("panel", preview_style)
-	body.add_child(preview_panel)
-
-	var preview_box := VBoxContainer.new()
-	preview_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	preview_box.add_theme_constant_override("separation", 2)
-	preview_panel.add_child(preview_box)
-
-	_mecha_select_preview = TextureRect.new()
-	_mecha_select_preview.custom_minimum_size = Vector2(150.0, 130.0)
-	_mecha_select_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_mecha_select_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_mecha_select_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	preview_box.add_child(_mecha_select_preview)
 
 	_mecha_select_name = Label.new()
 	_mecha_select_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_mecha_select_name.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
-	_mecha_select_name.add_theme_font_size_override("font_size", 28)
-	_mecha_select_name.add_theme_color_override("font_color", Color(0.62, 0.94, 1.0, 1.0))
-	preview_box.add_child(_mecha_select_name)
+	_mecha_select_name.add_theme_font_size_override("font_size", 24)
+	_mecha_select_name.add_theme_color_override("font_color", Color(0.65, 0.96, 1.0, 1.0))
+	root_box.add_child(_mecha_select_name)
 
-	_mecha_select_primary = _make_select_detail_label()
-	preview_box.add_child(_mecha_select_primary)
-	_mecha_select_secondary = _make_select_detail_label()
-	preview_box.add_child(_mecha_select_secondary)
+	var nav_row := HBoxContainer.new()
+	nav_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	nav_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	nav_row.add_theme_constant_override("separation", 8)
+	root_box.add_child(nav_row)
 
-	var right_box := VBoxContainer.new()
-	right_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_box.add_theme_constant_override("separation", 6)
-	body.add_child(right_box)
+	var left_stack := VBoxContainer.new()
+	left_stack.custom_minimum_size = Vector2(46.0, 0.0)
+	left_stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	nav_row.add_child(left_stack)
 
-	var grid := GridContainer.new()
-	grid.columns = 5
-	grid.add_theme_constant_override("h_separation", 4)
-	grid.add_theme_constant_override("v_separation", 4)
-	right_box.add_child(grid)
+	_mecha_select_prev_label = Label.new()
+	_mecha_select_prev_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mecha_select_prev_label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_mecha_select_prev_label.add_theme_font_size_override("font_size", 9)
+	_mecha_select_prev_label.add_theme_color_override("font_color", Color(0.27, 0.45, 0.51, 0.78))
+	left_stack.add_child(_mecha_select_prev_label)
 
-	for mecha_id in MechaManager.MECHA_IDS:
-		var button := Button.new()
-		button.custom_minimum_size = Vector2(72.0, 50.0)
-		button.text = String(MechaController.MECHA_DISPLAY_NAMES.get(mecha_id, mecha_id))
-		button.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-		button.add_theme_font_size_override("font_size", 15)
-		button.focus_mode = Control.FOCUS_ALL
-		
-		# Remove Godot's default white focus rectangle.
-		var empty_focus := StyleBoxEmpty.new()
-		button.add_theme_stylebox_override("focus", empty_focus)
-				
-		button.pressed.connect(_deploy_mecha.bind(String(mecha_id)))
-		button.focus_entered.connect(_select_mecha.bind(String(mecha_id)))
-		button.mouse_entered.connect(_select_mecha.bind(String(mecha_id)))
-		grid.add_child(button)
-		_mecha_select_buttons.append(button)
+	var left_button := _make_showroom_arrow_button("<")
+	left_button.pressed.connect(_cycle_showroom_mecha.bind(-1))
+	left_stack.add_child(left_button)
 
-	#_mecha_select_deploy = Button.new()
-	#_mecha_select_deploy.custom_minimum_size = Vector2(0.0, 52.0)
-	#_mecha_select_deploy.text = "DEPLOY"
-	#_mecha_select_deploy.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
-	#_mecha_select_deploy.add_theme_font_size_override("font_size", 25)
-	#_mecha_select_deploy.add_theme_color_override("font_color", Color(0.68, 0.96, 1.0, 1.0))
-	#_mecha_select_deploy.pressed.connect(_start_selected_run)
-	#right_box.add_child(_mecha_select_deploy)
+	var preview_panel := PanelContainer.new()
+	preview_panel.custom_minimum_size = Vector2(480.0, 146.0)
+	preview_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var preview_style := StyleBoxFlat.new()
+	preview_style.bg_color = Color(0.006, 0.014, 0.022, 0.96)
+	preview_style.border_width_left = 1
+	preview_style.border_width_top = 1
+	preview_style.border_width_right = 1
+	preview_style.border_width_bottom = 1
+	preview_style.border_color = Color(0.12, 0.38, 0.46, 0.86)
+	preview_style.corner_radius_top_left = 3
+	preview_style.corner_radius_top_right = 3
+	preview_style.corner_radius_bottom_left = 3
+	preview_style.corner_radius_bottom_right = 3
+	preview_panel.add_theme_stylebox_override("panel", preview_style)
+	nav_row.add_child(preview_panel)
 
-	var controls := Label.new()
-	controls.text = "ARROWS / MOUSE   SELECT     ENTER / A   CONFIRM"
-	controls.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	controls.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	controls.add_theme_font_size_override("font_size", 14)
-	controls.add_theme_color_override("font_color", Color(0.43, 0.59, 0.65, 1.0))
-	right_box.add_child(controls)
+	var viewport_container := SubViewportContainer.new()
+	viewport_container.stretch = true
+	viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_panel.add_child(viewport_container)
+
+	_showroom_viewport = SubViewport.new()
+	_showroom_viewport.name = "ShowroomViewport"
+	_showroom_viewport.size = Vector2i(480, 146)
+	_showroom_viewport.transparent_bg = true
+	_showroom_viewport.gui_disable_input = true
+	_showroom_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_showroom_viewport.world_2d = World2D.new()
+	viewport_container.add_child(_showroom_viewport)
+
+	_build_showroom_backdrop()
+
+	_showroom_stage = Node2D.new()
+	_showroom_stage.name = "ShowroomStage"
+	_showroom_stage.position = Vector2(240.0, 92.0)
+	_showroom_stage.scale = Vector2.ONE
+	_showroom_stage.process_mode = Node.PROCESS_MODE_ALWAYS
+	_showroom_viewport.add_child(_showroom_stage)
+
+	_showroom_fx_root = Node2D.new()
+	_showroom_fx_root.name = "PreviewFX"
+	_showroom_fx_root.process_mode = Node.PROCESS_MODE_ALWAYS
+	_showroom_viewport.add_child(_showroom_fx_root)
+
+	var right_stack := VBoxContainer.new()
+	right_stack.custom_minimum_size = Vector2(46.0, 0.0)
+	right_stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	nav_row.add_child(right_stack)
+
+	_mecha_select_next_label = Label.new()
+	_mecha_select_next_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mecha_select_next_label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_mecha_select_next_label.add_theme_font_size_override("font_size", 9)
+	_mecha_select_next_label.add_theme_color_override("font_color", Color(0.27, 0.45, 0.51, 0.78))
+	right_stack.add_child(_mecha_select_next_label)
+
+	var right_button := _make_showroom_arrow_button(">")
+	right_button.pressed.connect(_cycle_showroom_mecha.bind(1))
+	right_stack.add_child(right_button)
+
+	_showroom_demo_label = Label.new()
+	_showroom_demo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_showroom_demo_label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_showroom_demo_label.add_theme_font_size_override("font_size", 10)
+	_showroom_demo_label.add_theme_color_override("font_color", Color(0.50, 0.75, 0.82, 1.0))
+	root_box.add_child(_showroom_demo_label)
+
+	var ability_row := HBoxContainer.new()
+	ability_row.add_theme_constant_override("separation", 8)
+	ability_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	root_box.add_child(ability_row)
+	_mecha_select_primary = _make_showroom_ability_cell(ability_row, Color(0.45, 0.92, 1.0, 1.0))
+	_mecha_select_secondary = _make_showroom_ability_cell(ability_row, Color(0.88, 0.58, 1.0, 1.0))
+
+	_mecha_select_deploy = Button.new()
+	_mecha_select_deploy.custom_minimum_size = Vector2(230.0, 32.0)
+	_mecha_select_deploy.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_mecha_select_deploy.focus_mode = Control.FOCUS_NONE
+	_mecha_select_deploy.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
+	_mecha_select_deploy.add_theme_font_size_override("font_size", 18)
+	_mecha_select_deploy.add_theme_color_override("font_color", Color(0.68, 0.98, 1.0, 1.0))
+	_mecha_select_deploy.add_theme_color_override("font_hover_color", Color(0.90, 1.0, 1.0, 1.0))
+	_mecha_select_deploy.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	var deploy_style := StyleBoxFlat.new()
+	deploy_style.bg_color = Color(0.018, 0.055, 0.067, 0.98)
+	deploy_style.border_width_left = 1
+	deploy_style.border_width_top = 1
+	deploy_style.border_width_right = 1
+	deploy_style.border_width_bottom = 1
+	deploy_style.border_color = Color(0.25, 0.74, 0.82, 0.94)
+	deploy_style.corner_radius_top_left = 2
+	deploy_style.corner_radius_top_right = 2
+	deploy_style.corner_radius_bottom_left = 2
+	deploy_style.corner_radius_bottom_right = 2
+	_mecha_select_deploy.add_theme_stylebox_override("normal", deploy_style)
+	var deploy_hover := deploy_style.duplicate() as StyleBoxFlat
+	deploy_hover.bg_color = Color(0.03, 0.10, 0.12, 1.0)
+	deploy_hover.border_color = Color(0.48, 0.95, 1.0, 1.0)
+	_mecha_select_deploy.add_theme_stylebox_override("hover", deploy_hover)
+	_mecha_select_deploy.add_theme_stylebox_override("pressed", deploy_style)
+	_mecha_select_deploy.pressed.connect(_start_selected_run)
+	root_box.add_child(_mecha_select_deploy)
 
 	_mecha_select_status = Label.new()
 	_mecha_select_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_mecha_select_status.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	_mecha_select_status.add_theme_font_size_override("font_size", 14)
-	_mecha_select_status.add_theme_color_override("font_color", Color(0.72, 0.82, 0.86, 1.0))
+	_mecha_select_status.add_theme_font_size_override("font_size", 10)
+	_mecha_select_status.add_theme_color_override("font_color", Color(0.38, 0.58, 0.64, 1.0))
 	root_box.add_child(_mecha_select_status)
 
 	_select_mecha(_selected_mecha_id)
 	_mecha_select_overlay.hide()
 
-func _make_select_detail_label() -> Label:
+func _make_showroom_arrow_button(glyph: String) -> Button:
+	var button := Button.new()
+	button.text = glyph
+	button.custom_minimum_size = Vector2(42.0, 70.0)
+	button.focus_mode = Control.FOCUS_NONE
+	button.add_theme_font_override("font", load("res://Fonts/mago2.ttf") as Font)
+	button.add_theme_font_size_override("font_size", 30)
+	button.add_theme_color_override("font_color", Color(0.42, 0.78, 0.86, 0.92))
+	button.add_theme_color_override("font_hover_color", Color(0.82, 1.0, 1.0, 1.0))
+	button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+	button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
+	button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	return button
+
+func _make_showroom_ability_cell(row: HBoxContainer, color: Color) -> Label:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(215.0, 34.0)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(color.r * 0.035, color.g * 0.035, color.b * 0.035, 0.88)
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.border_color = Color(color.r * 0.36, color.g * 0.36, color.b * 0.36, 0.78)
+	panel.add_theme_stylebox_override("panel", style)
+	row.add_child(panel)
 	var label := Label.new()
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	label.add_theme_font_size_override("font_size", 13)
-	label.add_theme_color_override("font_color", Color(0.58, 0.72, 0.78, 1.0))
+	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_color_override("font_color", color)
+	panel.add_child(label)
 	return label
+
+func _build_showroom_backdrop() -> void:
+	if _showroom_viewport == null:
+		return
+	var backdrop := Node2D.new()
+	backdrop.name = "HangarGrid"
+	backdrop.process_mode = Node.PROCESS_MODE_ALWAYS
+	_showroom_viewport.add_child(backdrop)
+	# Sparse isometric deck lines give the live sprite a place to sit without
+	# competing with the ability VFX.
+	for y in range(3):
+		var grid_line_a := Line2D.new()
+		grid_line_a.width = 1.0
+		grid_line_a.default_color = Color(0.10, 0.28, 0.32, 0.26)
+		grid_line_a.antialiased = false
+		grid_line_a.add_point(Vector2(72.0, 92.0 + float(y) * 10.0))
+		grid_line_a.add_point(Vector2(240.0, 142.0 + float(y) * 10.0))
+		grid_line_a.add_point(Vector2(408.0, 92.0 + float(y) * 10.0))
+		backdrop.add_child(grid_line_a)
+	for x in range(-3, 4):
+		var grid_line_b := Line2D.new()
+		grid_line_b.width = 1.0
+		grid_line_b.default_color = Color(0.08, 0.23, 0.28, 0.22)
+		grid_line_b.antialiased = false
+		var base_x := 240.0 + float(x) * 44.0
+		grid_line_b.add_point(Vector2(base_x - 74.0, 142.0))
+		grid_line_b.add_point(Vector2(base_x, 92.0))
+		grid_line_b.add_point(Vector2(base_x + 74.0, 142.0))
+		backdrop.add_child(grid_line_b)
+	var horizon := Line2D.new()
+	horizon.width = 1.0
+	horizon.default_color = Color(0.20, 0.58, 0.65, 0.25)
+	horizon.add_point(Vector2(56.0, 92.0))
+	horizon.add_point(Vector2(424.0, 92.0))
+	backdrop.add_child(horizon)
 
 func _select_mecha(mecha_id: String) -> void:
 	if mecha_id not in MechaManager.MECHA_IDS:
@@ -479,21 +600,137 @@ func _select_mecha(mecha_id: String) -> void:
 	_selected_mecha_id = mecha_id
 	var display_name := String(MechaController.MECHA_DISPLAY_NAMES.get(mecha_id, mecha_id))
 	var abilities: Dictionary = MechaController.ABILITY_NAMES.get(mecha_id, {})
-	_mecha_select_name.text = display_name
-	_mecha_select_primary.text = "LMB   " + String(abilities.get("primary", "PRIMARY"))
-	_mecha_select_secondary.text = "RMB   " + String(abilities.get("secondary", "SECONDARY"))
-	var preview_path := "res://Sprites/Mechas/%s/%sidle_1.png" % [mecha_id, mecha_id.to_lower()]
-	_mecha_select_preview.texture = load(preview_path) as Texture2D
-	for i in range(_mecha_select_buttons.size()):
-		var button := _mecha_select_buttons[i]
-		var id = MechaManager.MECHA_IDS[i]
-		button.text = ("> " if id == mecha_id else "") + String(MechaController.MECHA_DISPLAY_NAMES.get(id, id))
+	_mecha_select_name.text = "%s   //   %s" % [mecha_id, display_name]
+	_mecha_select_primary.text = "LMB\n%s" % String(abilities.get("primary", "PRIMARY"))
+	_mecha_select_secondary.text = "RMB\n%s" % String(abilities.get("secondary", "SECONDARY"))
 	if _mecha_select_deploy != null:
-		_mecha_select_deploy.text = "DEPLOY   " + display_name
+		_mecha_select_deploy.text = "DEPLOY   %s" % display_name
 
-func _deploy_mecha(mecha_id: String) -> void:
-	_select_mecha(mecha_id)
-	_start_selected_run()
+	var index := MechaManager.MECHA_IDS.find(mecha_id)
+	var count := MechaManager.MECHA_IDS.size()
+	var prev_id = MechaManager.MECHA_IDS[(index - 1 + count) % count]
+	var next_id = MechaManager.MECHA_IDS[(index + 1) % count]
+	if _mecha_select_prev_label != null:
+		_mecha_select_prev_label.text = String(MechaController.MECHA_DISPLAY_NAMES.get(prev_id, prev_id))
+	if _mecha_select_next_label != null:
+		_mecha_select_next_label.text = String(MechaController.MECHA_DISPLAY_NAMES.get(next_id, next_id))
+	_rebuild_showroom_mecha()
+
+func _cycle_showroom_mecha(step: int) -> void:
+	var count := MechaManager.MECHA_IDS.size()
+	if count <= 0:
+		return
+	var index := MechaManager.MECHA_IDS.find(_selected_mecha_id)
+	if index < 0:
+		index = 0
+	index = (index + step + count) % count
+	_select_mecha(String(MechaManager.MECHA_IDS[index]))
+	SFX.play_ui(self, "level", -20.0, 1.18 if step > 0 else 0.94)
+
+func _rebuild_showroom_mecha() -> void:
+	_clear_showroom_fx()
+	if _showroom_mecha != null and is_instance_valid(_showroom_mecha):
+		_showroom_mecha.queue_free()
+	_showroom_mecha = null
+	if _showroom_stage == null:
+		return
+	var preview := MECHA_SCENE.instantiate() as MechaController
+	if preview == null:
+		return
+	preview.mecha_id = _selected_mecha_id
+	preview.position = Vector2.ZERO
+	preview.scale = Vector2.ONE * 1.70
+	preview.process_mode = Node.PROCESS_MODE_ALWAYS
+	preview.collision_layer = 0
+	preview.collision_mask = 0
+	_showroom_stage.add_child(preview)
+	preview.set_player_controlled(false)
+	preview.remove_from_group("mechas")
+	preview.animated_sprite.flip_h = true
+	preview.animated_sprite.play("idle")
+	_showroom_mecha = preview
+	_showroom_demo_state = 0
+	_showroom_demo_timer = 0.85
+	if _showroom_demo_label != null:
+		_showroom_demo_label.text = "LIVE PREVIEW   //   IDLE"
+
+func _clear_showroom_fx() -> void:
+	if _showroom_fx_root == null:
+		return
+	for child in _showroom_fx_root.get_children():
+		child.queue_free()
+
+func _trigger_showroom_ability(alternate: bool) -> void:
+	if _showroom_mecha == null or not is_instance_valid(_showroom_mecha) or _showroom_fx_root == null:
+		return
+	_clear_showroom_fx()
+	_showroom_mecha.animated_sprite.flip_h = true
+	_showroom_mecha.animated_sprite.play("attack")
+	var effect := SpecialAbilityScript.new() as SpacehaulSpecialAbility
+	effect.process_mode = Node.PROCESS_MODE_ALWAYS
+	_showroom_fx_root.add_child(effect)
+	# Preview-space coordinates are intentionally compact so even the widest Tier-0
+	# attacks remain readable inside the 480x158 showroom viewport.
+	var showroom_center := Vector2(240.0, 92.0)
+	var origin := showroom_center + Vector2(8.0, -18.0)
+	var owner_center := showroom_center + Vector2(0.0, -18.0)
+	var owner_ground := showroom_center
+	var target := showroom_center + Vector2(112.0, -18.0)
+	effect.preview_mode = true
+	effect.setup(
+		_selected_mecha_id,
+		origin,
+		owner_center,
+		owner_ground,
+		target,
+		RID(),
+		alternate,
+		1.0,
+		0,
+		0,
+		""
+	)
+	# setup() normally targets the gameplay scene. The showroom deliberately
+	# redirects every generated line, projectile, explosion and particle into the
+	# isolated SubViewport before the deferred ability sequence begins.
+	effect.root = _showroom_fx_root
+	if _showroom_demo_label != null:
+		var ability_name := _mecha_select_secondary.text.replace("RMB\n", "") if alternate else _mecha_select_primary.text.replace("LMB\n", "")
+		_showroom_demo_label.text = "%s   //   %s" % ["RMB" if alternate else "LMB", ability_name]
+
+func _update_mecha_showroom(delta: float) -> void:
+	if not _showroom_active or _showroom_mecha == null or not is_instance_valid(_showroom_mecha):
+		return
+	if Input.is_action_just_pressed("move_left"):
+		_cycle_showroom_mecha(-1)
+		return
+	if Input.is_action_just_pressed("move_right"):
+		_cycle_showroom_mecha(1)
+		return
+	_showroom_demo_timer = maxf(0.0, _showroom_demo_timer - delta)
+	if _showroom_demo_timer > 0.0:
+		return
+	match _showroom_demo_state:
+		0:
+			_trigger_showroom_ability(false)
+			_showroom_demo_state = 1
+			_showroom_demo_timer = 1.45
+		1:
+			_showroom_mecha.animated_sprite.play("idle")
+			_showroom_demo_state = 2
+			_showroom_demo_timer = 0.72
+			if _showroom_demo_label != null:
+				_showroom_demo_label.text = "LIVE PREVIEW   //   IDLE"
+		2:
+			_trigger_showroom_ability(true)
+			_showroom_demo_state = 3
+			_showroom_demo_timer = 2.10
+		3:
+			_showroom_mecha.animated_sprite.play("idle")
+			_showroom_demo_state = 0
+			_showroom_demo_timer = 1.05
+			if _showroom_demo_label != null:
+				_showroom_demo_label.text = "LIVE PREVIEW   //   IDLE"
 
 func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 	_menu_open = true
@@ -509,14 +746,18 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 		deck_banner.hide()
 	_set_standard_hud_visible(false)
 	if _mecha_select_status != null:
-		_mecha_select_status.text = status_text
+		_mecha_select_status.text = "LEFT / RIGHT   CYCLE CHASSIS      ENTER / A   DEPLOY"
 	if _mecha_select_overlay != null:
 		_mecha_select_overlay.show()
+		_showroom_active = true
 		_select_mecha(_selected_mecha_id)
-		if not _mecha_select_buttons.is_empty():
-			_mecha_select_buttons[MechaManager.MECHA_IDS.find(_selected_mecha_id)].grab_focus()
 
 func _start_selected_run() -> void:
+	_showroom_active = false
+	_clear_showroom_fx()
+	if _showroom_mecha != null and is_instance_valid(_showroom_mecha):
+		_showroom_mecha.queue_free()
+	_showroom_mecha = null
 	_menu_open = false
 	get_tree().paused = false
 	if _mecha_select_overlay != null:
