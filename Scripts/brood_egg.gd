@@ -5,6 +5,7 @@ signal hatch_requested(world_position: Vector2, phase: int)
 signal removed(egg: Node)
 
 const SFX = preload("res://Scripts/sound_fx.gd")
+const EnemyAttackVfx = preload("res://Scripts/enemy_attack_vfx.gd")
 const EGG_SHEET := "res://Sprites/Bosses/egg_hatch.png"
 const FRAME_SIZE := Vector2(32.0, 32.0)
 const FRAME_COUNT := 16
@@ -24,6 +25,7 @@ var _resolved := false
 var _landed := false
 var _base_sprite_position := Vector2(0.0, -12.0)
 var _rng := RandomNumberGenerator.new()
+var _warning_fx_played := false
 
 func setup(landing_position: Vector2, delay: float, boss_phase: int) -> void:
 	phase = clampi(boss_phase, 1, 3)
@@ -38,6 +40,15 @@ func setup(landing_position: Vector2, delay: float, boss_phase: int) -> void:
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(self, "global_position", target, 0.34)
 	tween.finished.connect(_on_landed)
+	EnemyAttackVfx.spawn_follow(
+		get_tree().current_scene,
+		self,
+		Color(1.35, 3.05, 0.62, 1.0),
+		Color(0.26, 1.35, 0.20, 1.0),
+		"bio",
+		0.38,
+		42.0
+	)
 	if start.distance_to(target) < 2.0:
 		global_position = target
 
@@ -69,6 +80,16 @@ func _physics_process(delta: float) -> void:
 	if not _landed:
 		return
 	_hatch_time -= delta
+	if not _warning_fx_played and _hatch_time <= minf(1.15, hatch_delay * 0.24):
+		_warning_fx_played = true
+		EnemyAttackVfx.spawn_shock_warning(
+			get_tree().current_scene,
+			global_position,
+			13.0 + float(phase),
+			Color(1.50, 3.15, 0.66, 1.0),
+			Color(0.28, 1.38, 0.20, 1.0),
+			0.48
+		)
 	if _hatch_time <= 0.0:
 		_resolve(true)
 
@@ -78,6 +99,14 @@ func _on_landed() -> void:
 	_landed = true
 	global_position = global_position.round()
 	_hatch_time = hatch_delay
+	EnemyAttackVfx.spawn_impact(
+		get_tree().current_scene,
+		global_position,
+		Color(1.35, 3.0, 0.58, 1.0),
+		Color(0.24, 1.28, 0.18, 1.0),
+		"bio",
+		false
+	)
 
 func take_projectile_hit(_direction: Vector2) -> void:
 	if _resolved:
@@ -110,6 +139,14 @@ func _resolve(natural_hatch: bool) -> void:
 	animated_sprite.modulate = Color.WHITE
 	animated_sprite.position = _base_sprite_position
 	animated_sprite.play("hatch")
+	EnemyAttackVfx.spawn_impact(
+		get_tree().current_scene,
+		global_position + Vector2(0.0, -10.0),
+		Color(1.55, 3.2, 0.68, 1.0),
+		Color(0.30, 1.40, 0.20, 1.0),
+		"bio",
+		true
+	)
 
 	# Destruction deliberately uses the exact same shell-break animation as a
 	# successful hatch, per the authored egg asset. Only a natural hatch creates

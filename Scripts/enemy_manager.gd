@@ -6,10 +6,15 @@ const BROODMOTHER_SCENE = preload("res://Scenes/broodmother.tscn")
 const SFX = preload("res://Scripts/sound_fx.gd")
 
 const BROODMOTHER_TRIGGER_TIME := 8.0 * 60.0 + 10.0
+const RUN_DURATION := 20.0 * 60.0
 
+@export_category("Spawn Director")
 @export var deck_path := NodePath("../ProceduralDeck")
 @export var minimum_spawn_distance_cells := 8
 @export var opening_grace_seconds := 7.0
+@export var swarm_events_enabled := true
+@export var announce_major_swarms := true
+@export_range(64, 128, 1) var hard_active_enemy_cap := 96
 
 @onready var deck: ProceduralDeck = get_node(deck_path) as ProceduralDeck
 
@@ -23,11 +28,26 @@ var _next_elite_time := 180.0
 var _broodmother_spawned := false
 var _broodmother: SpacehaulBroodmother
 
+# Encounter-director state. Ordinary population refill happens in same-species
+# packs; the event layer periodically creates a more legible swarm from one,
+# two, or three approach sectors instead of continuously drip-feeding random
+# single enemies around the deck.
+var _next_swarm_time := 52.0
+var _swarm_active := false
+var _swarm_enemy_type := "bug_1"
+var _swarm_remaining := 0
+var _swarm_spawn_timer := 0.0
+var _swarm_burst_size := 2
+var _swarm_pattern := "front"
+var _swarm_anchors: Array[Vector2] = []
+var _swarm_anchor_index := 0
+
 func _ready() -> void:
 	_rng.seed = deck.seed_value ^ 0xE11E5
 	deck.regenerated.connect(_on_deck_regenerated)
 	_deck_grace = opening_grace_seconds
 	_spawn_timer = 0.8
+	_next_swarm_time = 52.0
 
 func _process(delta: float) -> void:
 	_cleanup_dead_references()
@@ -36,6 +56,7 @@ func _process(delta: float) -> void:
 
 	var run_time := _get_run_time()
 	if not _broodmother_spawned and run_time >= BROODMOTHER_TRIGGER_TIME and _get_deck_number() >= 3:
+		_cancel_swarm_event()
 		_spawn_broodmother()
 		return
 
@@ -52,22 +73,8 @@ func _process(delta: float) -> void:
 	if run_time < opening_grace_seconds:
 		return
 
-	_spawn_timer -= delta
-	if _spawn_timer > 0.0:
-		return
-
-	var target_count := _target_active_count(run_time)
-	var alive_count := get_alive_count()
-	if alive_count < target_count:
-		var batch := _spawn_batch_size(run_time)
-		var to_spawn := mini(batch, target_count - alive_count)
-		for i in range(to_spawn):
-			var make_elite := run_time >= _next_elite_time and i == 0
-			_spawn_one(run_time, make_elite)
-			if make_elite:
-				_next_elite_time += 75.0
-
-	_spawn_timer = _spawn_interval(run_time)
+	_update_swarm_director(delta, run_time)
+	_update_population_director(delta, run_time)
 
 func reset_run() -> void:
 	total_kills = 0
@@ -76,19 +83,25 @@ func reset_run() -> void:
 	_broodmother_spawned = false
 	_clear_boss_encounter()
 	_clear_population()
+	_cancel_swarm_event()
 	_deck_grace = opening_grace_seconds
 	_spawn_timer = 0.8
+	_next_swarm_time = 52.0
 
 func set_spawning_enabled(value: bool) -> void:
 	_spawning_enabled = value
+	if not value:
+		_cancel_swarm_event()
 
 func prepare_video_capture_state(run_time: float) -> void:
 	_spawning_enabled = true
 	_clear_boss_encounter()
 	_clear_population()
+	_cancel_swarm_event()
 	_deck_grace = 0.0
 	_spawn_timer = 0.0
 	_broodmother_spawned = run_time >= BROODMOTHER_TRIGGER_TIME
+	_next_swarm_time = run_time + 8.0
 
 	if run_time < 180.0:
 		_next_elite_time = 180.0
@@ -97,10 +110,15 @@ func prepare_video_capture_state(run_time: float) -> void:
 		_next_elite_time = 180.0 + float(elapsed_elite_windows) * 75.0
 
 func _on_deck_regenerated(_spawn: Vector2, seed_value: int) -> void:
-	_rng.seed = seed_value ^ 0xE11E5 ^ int(_get_run_time() * 10.0)
+	var run_time := _get_run_time()
+	_rng.seed = seed_value ^ 0xE11E5 ^ int(run_time * 10.0)
 	_clear_population()
+	_cancel_swarm_event()
 	_deck_grace = 5.0
 	_spawn_timer = 0.6
+	# Deck transfers already reset spatial pressure. Give the player a short
+	# orientation window before the next authored swarm can begin.
+	_next_swarm_time = maxf(_next_swarm_time, run_time + 14.0)
 
 func _clear_population() -> void:
 	for enemy in enemies:
@@ -128,16 +146,312 @@ func _cleanup_dead_references() -> void:
 			alive.append(enemy)
 	enemies = alive
 
-func _spawn_one(run_time: float, make_elite: bool) -> void:
-	if deck == null:
+# -----------------------------------------------------------------------------
+# Population director
+# -----------------------------------------------------------------------------
+
+func _update_population_director(delta: float, run_time: float) -> void:
+	_spawn_timer -= delta
+	if _spawn_timer > 0.0:
 		return
+
+	var target_count := _target_active_count(run_time)
+	var alive_count := get_alive_count()
+	if alive_count < target_count:
+		var deficit := target_count - alive_count
+		var enemy_type := _choose_pack_enemy_type(run_time)
+		var desired_pack := mini(_pack_size_for_type(enemy_type, run_time), deficit)
+		if desired_pack > 0:
+			_spawn_pack(enemy_type, desired_pack, run_time)
+
+	_spawn_timer = _spawn_interval(run_time)
+
+func _spawn_pack(enemy_type: String, count: int, run_time: float, anchor: Vector2 = Vector2.ZERO) -> int:
+	if count <= 0 or deck == null:
+		return 0
 	var player := get_tree().get_first_node_in_group("player_mecha") as MechaController
 	if player == null:
+		return 0
+
+	if anchor == Vector2.ZERO:
+		anchor = deck.get_random_enemy_spawn_position(player.global_position, minimum_spawn_distance_cells, _rng)
+	if anchor == Vector2.ZERO:
+		return 0
+
+	var spawned := 0
+	var used_positions: Array[Vector2] = []
+	for i in range(count):
+		if get_alive_count() >= hard_active_enemy_cap:
+			break
+		var spawn_position := anchor
+		if i > 0:
+			spawn_position = _cluster_position_near(anchor, player.global_position, used_positions)
+		if spawn_position == Vector2.ZERO:
+			continue
+
+		var make_elite := run_time >= _next_elite_time
+		var enemy := _spawn_enemy_at(spawn_position, enemy_type, run_time, make_elite)
+		if enemy != null:
+			spawned += 1
+			used_positions.append(spawn_position)
+			if make_elite:
+				_next_elite_time += 75.0
+	return spawned
+
+func _cluster_position_near(anchor: Vector2, player_position: Vector2, used_positions: Array[Vector2]) -> Vector2:
+	# Radius 2 keeps a pack visually recognizable while still letting Godot's
+	# character bodies/pathfinding fan it out naturally after spawning.
+	for attempt in range(10):
+		var candidate := deck.get_random_walkable_position_near(anchor, 2, _rng)
+		if candidate == Vector2.ZERO:
+			continue
+		if not _is_far_enough_from_player(candidate, player_position, minimum_spawn_distance_cells - 1):
+			continue
+		var too_close := false
+		for used in used_positions:
+			if used.distance_squared_to(candidate) < 36.0:
+				too_close = true
+				break
+		if too_close:
+			continue
+		return candidate.round()
+	return anchor.round()
+
+func _is_far_enough_from_player(candidate: Vector2, player_position: Vector2, minimum_cells: int) -> bool:
+	if deck == null:
+		return true
+	var a := deck.world_to_cell(candidate)
+	var b := deck.world_to_cell(player_position)
+	return Vector2(a).distance_to(Vector2(b)) >= float(maxi(1, minimum_cells))
+
+# -----------------------------------------------------------------------------
+# Swarm event director
+# -----------------------------------------------------------------------------
+
+func _update_swarm_director(delta: float, run_time: float) -> void:
+	if not swarm_events_enabled:
 		return
-	var spawn_position := deck.get_random_enemy_spawn_position(player.global_position, minimum_spawn_distance_cells, _rng)
-	if spawn_position == Vector2.ZERO:
+
+	if not _swarm_active:
+		if run_time >= _next_swarm_time and run_time < RUN_DURATION - 10.0:
+			_begin_swarm_event(run_time)
 		return
-	_spawn_enemy_at(spawn_position, _choose_enemy_type(run_time), run_time, make_elite)
+
+	_swarm_spawn_timer -= delta
+	if _swarm_spawn_timer > 0.0:
+		return
+
+	if _swarm_remaining <= 0:
+		_finish_swarm_event(run_time)
+		return
+
+	var event_cap := mini(hard_active_enemy_cap, _target_active_count(run_time) + _swarm_headroom(run_time))
+	if get_alive_count() >= event_cap:
+		# The event budget is intentionally allowed to exceed the ambient target,
+		# but it waits rather than creating an unreadable pile-up.
+		_swarm_spawn_timer = 0.35
+		return
+
+	var burst := mini(_swarm_burst_size, _swarm_remaining)
+	burst = mini(burst, event_cap - get_alive_count())
+	if burst <= 0:
+		_swarm_spawn_timer = 0.25
+		return
+
+	var anchor := _next_swarm_anchor()
+	var spawned := _spawn_pack(_swarm_enemy_type, burst, run_time, anchor)
+	_swarm_remaining -= spawned
+	_swarm_spawn_timer = _swarm_burst_interval(run_time)
+
+	if spawned <= 0:
+		# A generated deck can occasionally make one approach sector invalid.
+		# Refresh the anchors rather than stalling the whole event.
+		_swarm_anchors = _build_swarm_anchors(_swarm_pattern)
+		_swarm_spawn_timer = 0.45
+
+func _begin_swarm_event(run_time: float) -> void:
+	_swarm_enemy_type = _choose_swarm_enemy_type(run_time)
+	_swarm_pattern = _choose_swarm_pattern(run_time)
+	_swarm_remaining = _swarm_size(run_time, _swarm_enemy_type)
+	_swarm_burst_size = _swarm_burst_count(run_time, _swarm_enemy_type)
+	_swarm_spawn_timer = 0.05
+	_swarm_anchors = _build_swarm_anchors(_swarm_pattern)
+	_swarm_anchor_index = 0
+
+	if _swarm_anchors.is_empty():
+		_schedule_next_swarm(run_time)
+		return
+
+	_swarm_active = true
+	if announce_major_swarms and run_time >= 120.0:
+		SFX.play_ui(self, "warning", -12.0, 0.92)
+		_show_swarm_banner(_swarm_pattern)
+
+func _finish_swarm_event(run_time: float) -> void:
+	_swarm_active = false
+	_swarm_remaining = 0
+	_swarm_anchors.clear()
+	_swarm_anchor_index = 0
+	_schedule_next_swarm(run_time)
+
+func _cancel_swarm_event() -> void:
+	_swarm_active = false
+	_swarm_remaining = 0
+	_swarm_spawn_timer = 0.0
+	_swarm_anchors.clear()
+	_swarm_anchor_index = 0
+
+func _schedule_next_swarm(run_time: float) -> void:
+	var interval := 56.0
+	if run_time < 120.0:
+		interval = _rng.randf_range(52.0, 64.0)
+	elif run_time < 300.0:
+		interval = _rng.randf_range(44.0, 56.0)
+	elif run_time < 600.0:
+		interval = _rng.randf_range(37.0, 49.0)
+	elif run_time < 900.0:
+		interval = _rng.randf_range(31.0, 42.0)
+	else:
+		interval = _rng.randf_range(25.0, 35.0)
+	_next_swarm_time = run_time + interval
+
+func _build_swarm_anchors(pattern: String) -> Array[Vector2]:
+	var result: Array[Vector2] = []
+	if deck == null:
+		return result
+	var player := get_tree().get_first_node_in_group("player_mecha") as MechaController
+	if player == null:
+		return result
+
+	var desired := 1
+	match pattern:
+		"pincer": desired = 2
+		"surround": desired = 3
+		_: desired = 1
+
+	for i in range(desired):
+		var best := Vector2.ZERO
+		for attempt in range(18):
+			var candidate := deck.get_random_enemy_spawn_position(player.global_position, minimum_spawn_distance_cells + 1, _rng)
+			if candidate == Vector2.ZERO:
+				continue
+			var separated := true
+			for existing in result:
+				if candidate.distance_squared_to(existing) < 140.0 * 140.0:
+					separated = false
+					break
+			if separated:
+				best = candidate
+				break
+		if best != Vector2.ZERO:
+			result.append(best.round())
+
+	# Never discard a valid event because a compact procedural deck could not
+	# satisfy the ideal sector separation.
+	if result.is_empty():
+		var fallback := deck.get_random_enemy_spawn_position(player.global_position, minimum_spawn_distance_cells, _rng)
+		if fallback != Vector2.ZERO:
+			result.append(fallback.round())
+	return result
+
+func _next_swarm_anchor() -> Vector2:
+	if _swarm_anchors.is_empty():
+		return Vector2.ZERO
+	var anchor := _swarm_anchors[_swarm_anchor_index % _swarm_anchors.size()]
+	_swarm_anchor_index = (_swarm_anchor_index + 1) % _swarm_anchors.size()
+	return anchor
+
+func _choose_swarm_pattern(run_time: float) -> String:
+	if run_time < 180.0:
+		return "front"
+	if run_time < 480.0:
+		return "pincer" if _rng.randf() < 0.46 else "front"
+	if run_time < 780.0:
+		var roll := _rng.randf()
+		if roll < 0.24:
+			return "surround"
+		if roll < 0.67:
+			return "pincer"
+		return "front"
+	var late_roll := _rng.randf()
+	if late_roll < 0.42:
+		return "surround"
+	if late_roll < 0.80:
+		return "pincer"
+	return "front"
+
+func _choose_swarm_enemy_type(run_time: float) -> String:
+	# Swarms favor mobile organisms. Ranged/shock/heavy archetypes still arrive
+	# in ordinary squads, where their attacks remain readable instead of turning
+	# a swarm event into projectile spam.
+	var pool: Array[String] = []
+	if run_time < 70.0:
+		pool = ["bug_1", "bug_1", "alien_1"]
+	elif run_time < 180.0:
+		pool = ["bug_1", "bug_2", "spider_1", "alien_1"]
+	elif run_time < 420.0:
+		pool = ["bug_1", "bug_2", "bug_2", "spider_1", "spider_1", "alien_1"]
+	elif run_time < 780.0:
+		pool = ["bug_2", "bug_2", "spider_1", "spider_1", "alien_1", "bug_1"]
+	else:
+		pool = ["bug_2", "bug_2", "spider_1", "spider_1", "alien_1", "bug_1", "bug_4"]
+	return pool[_rng.randi_range(0, pool.size() - 1)]
+
+func _swarm_size(run_time: float, enemy_type: String) -> int:
+	var amount := 7
+	if run_time < 120.0:
+		amount = _rng.randi_range(6, 8)
+	elif run_time < 240.0:
+		amount = _rng.randi_range(8, 11)
+	elif run_time < 480.0:
+		amount = _rng.randi_range(11, 15)
+	elif run_time < 720.0:
+		amount = _rng.randi_range(14, 18)
+	elif run_time < 960.0:
+		amount = _rng.randi_range(17, 22)
+	else:
+		amount = _rng.randi_range(20, 27)
+
+	if enemy_type == "bug_4":
+		amount = maxi(8, int(round(float(amount) * 0.60)))
+	return amount
+
+func _swarm_burst_count(run_time: float, enemy_type: String) -> int:
+	var amount := 2
+	if run_time >= 240.0:
+		amount = 3
+	if run_time >= 720.0:
+		amount = 4
+	if enemy_type == "bug_4":
+		amount = mini(amount, 2)
+	return amount
+
+func _swarm_burst_interval(run_time: float) -> float:
+	return clampf(0.42 - run_time * 0.00018, 0.18, 0.42)
+
+func _swarm_headroom(run_time: float) -> int:
+	if run_time < 180.0:
+		return 5
+	if run_time < 480.0:
+		return 8
+	if run_time < 900.0:
+		return 12
+	return 16
+
+func _show_swarm_banner(pattern: String) -> void:
+	var managers := get_tree().get_nodes_in_group("survival_manager")
+	if managers.is_empty() or not managers[0].has_method("_show_banner"):
+		return
+	var label := "BIO-SWARM DETECTED"
+	if pattern == "pincer":
+		label = "BIO-SWARM   MULTIPLE CONTACTS"
+	elif pattern == "surround":
+		label = "BIO-SWARM   ENCIRCLEMENT"
+	managers[0].call("_show_banner", label, 0.72)
+
+# -----------------------------------------------------------------------------
+# Enemy creation / boss integration
+# -----------------------------------------------------------------------------
 
 func _spawn_enemy_at(spawn_position: Vector2, enemy_type: String, run_time: float, make_elite: bool = false) -> SpacehaulEnemy:
 	var enemy := ENEMY_SCENE.instantiate() as SpacehaulEnemy
@@ -211,6 +525,7 @@ func _on_broodmother_defeated() -> void:
 	_broodmother = null
 	_spawn_timer = 1.25
 	_deck_grace = 2.0
+	_next_swarm_time = maxf(_next_swarm_time, _get_run_time() + 12.0)
 	var managers := get_tree().get_nodes_in_group("survival_manager")
 	if not managers.is_empty() and managers[0].has_method("_show_banner"):
 		managers[0].call("_show_banner", "BROODMOTHER ELIMINATED", 1.25)
@@ -218,7 +533,15 @@ func _on_broodmother_defeated() -> void:
 func is_boss_active() -> bool:
 	return _broodmother != null and is_instance_valid(_broodmother) and not _broodmother.is_queued_for_deletion()
 
-func _choose_enemy_type(run_time: float) -> String:
+# -----------------------------------------------------------------------------
+# Run pacing / composition
+# -----------------------------------------------------------------------------
+
+func _choose_pack_enemy_type(run_time: float) -> String:
+	var pool := _enemy_pool(run_time)
+	return pool[_rng.randi_range(0, pool.size() - 1)]
+
+func _enemy_pool(run_time: float) -> Array[String]:
 	var pool: Array[String] = []
 	if run_time < 40.0:
 		pool = ["bug_1", "bug_1", "alien_1"]
@@ -232,36 +555,57 @@ func _choose_enemy_type(run_time: float) -> String:
 		pool = ["bug_2", "spider_1", "beetle_2", "spider_2", "beetle_1", "bug_3", "bug_4"]
 	else:
 		pool = ["alien_1", "beetle_1", "beetle_2", "bug_1", "bug_2", "bug_3", "bug_4", "spider_1", "spider_2", "spider_3"]
-	return pool[_rng.randi_range(0, pool.size() - 1)]
+	return pool
+
+func _pack_size_for_type(enemy_type: String, run_time: float) -> int:
+	var amount := 2
+	if run_time >= 60.0:
+		amount = 3
+	if run_time >= 240.0:
+		amount = 4
+	if run_time >= 600.0:
+		amount = 5
+	if run_time >= 960.0:
+		amount = 6
+
+	# Specialists and heavies work better as squads embedded between larger
+	# organism packs. This also prevents simultaneous ranged telegraphs from
+	# becoming visual noise.
+	match enemy_type:
+		"beetle_1", "bug_4", "spider_3":
+			amount = mini(amount, 2 if run_time < 720.0 else 3)
+		"beetle_2", "bug_3", "spider_2":
+			amount = mini(amount, 3 if run_time < 720.0 else 4)
+		_:
+			pass
+	return maxi(1, amount)
 
 func _target_active_count(run_time: float) -> int:
+	# The baseline is intentionally lower than the temporary event ceiling. That
+	# creates the survivor-game rhythm of pressure -> swarm peak -> cleanup,
+	# instead of maintaining the maximum density every second of the run.
 	if run_time < 30.0:
 		return 5
 	if run_time < 60.0:
 		return 8
 	if run_time < 90.0:
-		return 12
+		return 11
 	if run_time < 120.0:
-		return 16
+		return 14
 	if run_time < 180.0:
-		return 21
+		return 19
 	if run_time < 240.0:
-		return 27
-	var scaled := 27 + int((run_time - 240.0) / 18.0) + (_get_deck_number() - 1) * 3
-	return clampi(scaled, 27, 78)
-
-func _spawn_batch_size(run_time: float) -> int:
-	if run_time < 120.0:
-		return 1
-	if run_time < 360.0:
-		return 2
-	if run_time < 720.0:
-		return 3
-	return 4
+		return 24
+	var scaled := 24 + int((run_time - 240.0) / 20.0) + (_get_deck_number() - 1) * 3
+	return clampi(scaled, 24, 72)
 
 func _spawn_interval(run_time: float) -> float:
-	var interval := 1.55 - run_time * 0.00135 - float(_get_deck_number() - 1) * 0.06
-	return clampf(interval, 0.24, 1.55)
+	# Packs replace the old single-enemy drip feed, so ordinary refill can be a
+	# little slower while still rebuilding pressure quickly after a kill streak.
+	var interval := 2.15 - run_time * 0.00115 - float(_get_deck_number() - 1) * 0.055
+	if _swarm_active:
+		interval += 0.55
+	return clampf(interval, 0.62, 2.15)
 
 func _on_enemy_defeated(_salvage_value: int) -> void:
 	total_kills += 1

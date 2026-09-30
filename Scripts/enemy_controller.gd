@@ -6,6 +6,7 @@ signal defeated(salvage_value: int)
 const EnemyProjectileScript = preload("res://Scripts/enemy_projectile.gd")
 const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
 const SFX = preload("res://Scripts/sound_fx.gd")
+const EnemyAttackVfx = preload("res://Scripts/enemy_attack_vfx.gd")
 
 const FRAME_SIZE := Vector2(32.0, 32.0)
 const FRAME_COUNT := 8
@@ -57,6 +58,7 @@ var _path_step := Vector2.ZERO
 var _charge_windup := 0.0
 var _charge_time := 0.0
 var _charge_direction := Vector2.RIGHT
+var _charge_has_hit := false
 var _rng := RandomNumberGenerator.new()
 var _dissolve_material: ShaderMaterial
 var _base_sprite_position := Vector2(0.0, -12.0)
@@ -116,6 +118,9 @@ func _physics_process(delta: float) -> void:
 		if _charge_windup <= 0.0:
 			_charge_time = 0.55
 			animated_sprite.speed_scale = 1.55
+			var palette := _attack_palette()
+			EnemyAttackVfx.spawn_burst(get_tree().current_scene, global_position + Vector2(0.0, -7.0), palette["core"], palette["glow"], "sparks", 8, 34.0)
+			EnemyAttackVfx.spawn_follow(get_tree().current_scene, self, palette["core"], palette["glow"], "sparks", 0.58, 48.0)
 		move_and_slide()
 		return
 
@@ -240,6 +245,7 @@ func _find_target() -> MechaController:
 
 func _begin_charge(direction: Vector2) -> void:
 	_charge_direction = direction
+	_charge_has_hit = false
 	_charge_windup = 0.44
 	_attack_time = attack_cooldown * 2.2
 	velocity = Vector2.ZERO
@@ -247,47 +253,46 @@ func _begin_charge(direction: Vector2) -> void:
 	_spawn_telegraph(direction)
 
 func _spawn_telegraph(direction: Vector2) -> void:
-	var line := Line2D.new()
-	line.width = 1.0
-	line.default_color = Color(2.8, 0.38, 0.22, 0.72)
-	line.antialiased = false
-	line.add_point(global_position.round())
-	line.add_point((global_position + direction * 42.0).round())
-	line.z_as_relative = false
-	line.z_index = 1600
-	get_tree().current_scene.add_child(line)
-	var additive := CanvasItemMaterial.new()
-	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
-	line.material = additive
-	var tw := line.create_tween()
-	tw.tween_property(line, "modulate:a", 0.0, 0.42)
-	tw.tween_callback(line.queue_free)
+	var palette := _attack_palette()
+	EnemyAttackVfx.spawn_charge_telegraph(
+		get_tree().current_scene,
+		global_position + Vector2(0.0, -7.0),
+		direction,
+		52.0,
+		palette["core"],
+		palette["glow"]
+	)
 
 func _try_contact_hit() -> void:
-	if _target == null or not is_instance_valid(_target) or _attack_time > 0.0:
+	if _target == null or not is_instance_valid(_target):
+		return
+	var charging_now := charger and _charge_time > 0.0
+	if charging_now:
+		if _charge_has_hit:
+			return
+	elif _attack_time > 0.0:
 		return
 	if global_position.distance_to(_target.global_position) > melee_range + 5.0:
 		return
 	var push := (_target.global_position - global_position).normalized()
 	_target.take_projectile_hit(push)
-	_attack_time = attack_cooldown
+	if charging_now:
+		_charge_has_hit = true
+	else:
+		_attack_time = attack_cooldown
 	_spawn_melee_pixel(push)
 
 func _spawn_melee_pixel(direction: Vector2) -> void:
-	var line := Line2D.new()
-	line.width = 1.0
-	line.default_color = Color(2.8, 0.65, 0.35, 0.9)
-	line.antialiased = false
-	var center := global_position + Vector2(0.0, -10.0)
-	var normal := Vector2(-direction.y, direction.x)
-	line.add_point((center + normal * 5.0).round())
-	line.add_point((center + direction * 10.0 - normal * 5.0).round())
-	line.z_as_relative = false
-	line.z_index = 1650
-	get_tree().current_scene.add_child(line)
-	var tw := line.create_tween()
-	tw.tween_property(line, "modulate:a", 0.0, 0.10)
-	tw.tween_callback(line.queue_free)
+	var palette := _attack_palette()
+	var heavy := enemy_type == "bug_4" or enemy_type == "beetle_1"
+	EnemyAttackVfx.spawn_slash(
+		get_tree().current_scene,
+		global_position + Vector2(0.0, -10.0),
+		direction,
+		palette["core"],
+		palette["glow"],
+		heavy
+	)
 
 func _begin_ranged_telegraph(direction: Vector2) -> void:
 	if _telegraphing or _dead:
@@ -310,21 +315,24 @@ func _begin_ranged_telegraph(direction: Vector2) -> void:
 
 func _spawn_ranged_telegraph(direction: Vector2) -> void:
 	var origin := global_position + Vector2(0.0, -12.0)
-	var line := Line2D.new()
-	line.width = 1.0
-	line.default_color = Color(projectile_glow.r, projectile_glow.g, projectile_glow.b, 0.68)
-	line.antialiased = false
-	line.add_point(origin.round())
-	line.add_point((origin + direction * 25.0).round())
-	line.z_as_relative = false
-	line.z_index = 1660
-	get_tree().current_scene.add_child(line)
-	var additive := CanvasItemMaterial.new()
-	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
-	line.material = additive
-	var tw := line.create_tween()
-	tw.tween_property(line, "modulate:a", 0.12, 0.18)
-	tw.tween_callback(line.queue_free)
+	EnemyAttackVfx.spawn_muzzle(
+		get_tree().current_scene,
+		origin,
+		direction,
+		projectile_color,
+		projectile_glow,
+		_projectile_profile(),
+		enemy_type == "spider_3"
+	)
+	EnemyAttackVfx.spawn_path(
+		get_tree().current_scene,
+		origin,
+		origin + direction * 28.0,
+		projectile_color,
+		projectile_glow,
+		_projectile_profile(),
+		5
+	)
 
 func _begin_shock_telegraph() -> void:
 	if _telegraphing or _dead:
@@ -346,28 +354,14 @@ func _begin_shock_telegraph() -> void:
 	_fire_shock_pulse()
 
 func _spawn_shock_warning_ring() -> void:
-	var ring := Line2D.new()
-	ring.width = 1.0
-	ring.default_color = Color(0.55, 2.6, 3.2, 0.66)
-	ring.antialiased = false
-	var points := PackedVector2Array()
-	for i in range(17):
-		var angle := TAU * float(i) / 16.0
-		points.append((Vector2(cos(angle), sin(angle)) * 8.0).round())
-	ring.points = points
-	ring.z_as_relative = false
-	ring.z_index = 1635
-	get_tree().current_scene.add_child(ring)
-	ring.global_position = global_position + Vector2(0.0, -8.0)
-	var additive := CanvasItemMaterial.new()
-	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
-	ring.material = additive
-	var tw := ring.create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(ring, "scale", Vector2.ONE * 6.6, 0.34)
-	tw.tween_property(ring, "modulate:a", 0.0, 0.34)
-	tw.set_parallel(false)
-	tw.tween_callback(ring.queue_free)
+	EnemyAttackVfx.spawn_shock_warning(
+		get_tree().current_scene,
+		global_position + Vector2(0.0, -8.0),
+		54.0,
+		Color(0.78, 2.95, 3.35, 1.0),
+		Color(0.18, 1.05, 1.85, 1.0),
+		0.34
+	)
 
 func _fire_projectile(direction: Vector2) -> void:
 	if _target == null or not is_instance_valid(_target) or not _target.is_inside_tree():
@@ -377,7 +371,8 @@ func _fire_projectile(direction: Vector2) -> void:
 	var projectile := EnemyProjectileScript.new() as SpacehaulEnemyProjectile
 	get_tree().current_scene.add_child(projectile)
 	var muzzle := global_position + Vector2(0.0, -12.0) + direction * 9.0
-	projectile.setup(muzzle, direction, get_rid(), projectile_color, projectile_glow, projectile_speed)
+	projectile.setup(muzzle, direction, get_rid(), projectile_color, projectile_glow, projectile_speed, _projectile_profile(), enemy_type == "spider_3")
+	EnemyAttackVfx.spawn_muzzle(get_tree().current_scene, muzzle, direction, projectile_color, projectile_glow, _projectile_profile(), enemy_type == "spider_3")
 	_attack_time = attack_cooldown
 	SFX.play(self, "enemy_shot", -18.0, _rng.randf_range(0.90, 1.10))
 
@@ -396,7 +391,9 @@ func _fire_delayed_second_shot(direction: Vector2) -> void:
 		return
 	var projectile := EnemyProjectileScript.new() as SpacehaulEnemyProjectile
 	get_tree().current_scene.add_child(projectile)
-	projectile.setup(global_position + Vector2(0.0, -12.0) + direction * 9.0, direction, get_rid(), projectile_color, projectile_glow, projectile_speed * 0.92)
+	var muzzle := global_position + Vector2(0.0, -12.0) + direction * 9.0
+	projectile.setup(muzzle, direction, get_rid(), projectile_color, projectile_glow, projectile_speed * 0.92, _projectile_profile(), true)
+	EnemyAttackVfx.spawn_muzzle(get_tree().current_scene, muzzle, direction, projectile_color, projectile_glow, _projectile_profile(), true)
 	SFX.play(self, "enemy_shot", -20.0, _rng.randf_range(0.95, 1.08))
 
 func _fire_shock_pulse() -> void:
@@ -404,23 +401,50 @@ func _fire_shock_pulse() -> void:
 	velocity = Vector2.ZERO
 	SFX.play(self, "enemy_shot", -16.5, _rng.randf_range(0.72, 0.82))
 	var center := global_position + Vector2(0.0, -8.0)
-	for i in range(8):
-		var angle := TAU * float(i) / 8.0
-		var line := Line2D.new()
-		line.width = 1.0
-		line.default_color = Color(0.75, 2.8, 3.2, 0.85)
-		line.antialiased = false
-		line.add_point(center.round())
-		line.add_point((center + Vector2(cos(angle), sin(angle)) * 18.0).round())
-		line.z_as_relative = false
-		line.z_index = 1640
-		get_tree().current_scene.add_child(line)
-		var tw := line.create_tween()
-		tw.tween_property(line, "modulate:a", 0.0, 0.18)
-		tw.tween_callback(line.queue_free)
+	EnemyAttackVfx.spawn_shock_pulse(
+		get_tree().current_scene,
+		center,
+		54.0,
+		Color(0.88, 3.1, 3.45, 1.0),
+		Color(0.20, 1.10, 1.95, 1.0)
+	)
 	if _target != null and is_instance_valid(_target) and _target.is_inside_tree():
 		if _target.is_in_group("player_mecha") and global_position.distance_to(_target.global_position) <= 58.0:
 			_target.take_projectile_hit((_target.global_position - global_position).normalized())
+
+func _attack_palette() -> Dictionary:
+	match enemy_type:
+		"alien_1":
+			return {"core": Color(1.55, 3.0, 0.72, 1.0), "glow": Color(0.30, 1.25, 0.24, 1.0)}
+		"beetle_1":
+			return {"core": Color(3.0, 0.82, 0.38, 1.0), "glow": Color(1.45, 0.22, 0.08, 1.0)}
+		"beetle_2":
+			return {"core": projectile_color, "glow": projectile_glow}
+		"bug_1":
+			return {"core": Color(2.1, 3.0, 0.72, 1.0), "glow": Color(0.55, 1.25, 0.18, 1.0)}
+		"bug_2":
+			return {"core": Color(3.0, 0.72, 0.42, 1.0), "glow": Color(1.35, 0.18, 0.08, 1.0)}
+		"bug_3":
+			return {"core": Color(0.88, 3.1, 3.45, 1.0), "glow": Color(0.20, 1.10, 1.95, 1.0)}
+		"bug_4":
+			return {"core": Color(3.15, 1.05, 0.42, 1.0), "glow": Color(1.55, 0.28, 0.08, 1.0)}
+		"spider_1":
+			return {"core": Color(1.25, 3.0, 1.02, 1.0), "glow": Color(0.22, 1.22, 0.40, 1.0)}
+		"spider_2", "spider_3":
+			return {"core": projectile_color, "glow": projectile_glow}
+		_:
+			return {"core": Color(2.8, 0.72, 0.38, 1.0), "glow": Color(1.2, 0.22, 0.08, 1.0)}
+
+func _projectile_profile() -> String:
+	match enemy_type:
+		"beetle_2":
+			return "bio"
+		"spider_2":
+			return "venom"
+		"spider_3":
+			return "ember"
+		_:
+			return "bio"
 
 func take_projectile_hit(direction: Vector2) -> void:
 	if _dead:

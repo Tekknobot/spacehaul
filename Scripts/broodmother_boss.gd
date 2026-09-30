@@ -7,6 +7,7 @@ const EnemyProjectileScript = preload("res://Scripts/enemy_projectile.gd")
 const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
 const EggScene = preload("res://Scenes/brood_egg.tscn")
 const SFX = preload("res://Scripts/sound_fx.gd")
+const EnemyAttackVfx = preload("res://Scripts/enemy_attack_vfx.gd")
 
 const FRAME_SIZE := Vector2(64.0, 64.0)
 const FRAME_COUNT := 8
@@ -130,6 +131,16 @@ func _begin_lay_attack() -> void:
 	var token := _attack_token
 	velocity = Vector2.ZERO
 	animated_sprite.play("attack")
+	var lay_center := global_position + Vector2(0.0, -16.0)
+	EnemyAttackVfx.spawn_shock_warning(
+		get_tree().current_scene,
+		lay_center,
+		28.0 + float(phase) * 3.0,
+		Color(1.45, 3.15, 0.66, 1.0),
+		Color(0.28, 1.38, 0.20, 1.0),
+		0.38
+	)
+	EnemyAttackVfx.spawn_burst(get_tree().current_scene, lay_center, Color(1.45, 3.15, 0.66, 1.0), Color(0.28, 1.38, 0.20, 1.0), "bio", 9 + phase * 2, 24.0)
 	SFX.play_nonstacking(self, "warning", -19.0, 0.74 + float(phase) * 0.04, 300)
 	await get_tree().create_timer(0.38, false).timeout
 	if not _attack_still_valid(token):
@@ -154,6 +165,9 @@ func _begin_spit_attack() -> void:
 		aim = (_target.global_position - global_position).normalized()
 	_update_facing(aim)
 	animated_sprite.play("attack")
+	var mouth := global_position + Vector2(0.0, -25.0) + aim * 10.0
+	EnemyAttackVfx.spawn_muzzle(get_tree().current_scene, mouth, aim, Color(1.25, 3.2, 0.70, 1.0), Color(0.25, 1.45, 0.20, 1.0), "venom", true)
+	EnemyAttackVfx.spawn_path(get_tree().current_scene, mouth, mouth + aim * 34.0, Color(1.25, 3.2, 0.70, 1.0), Color(0.25, 1.45, 0.20, 1.0), "venom", 7)
 	await get_tree().create_timer(0.30, false).timeout
 	if not _attack_still_valid(token):
 		return
@@ -263,8 +277,13 @@ func _fire_bio_volley(base_direction: Vector2) -> void:
 			get_rid(),
 			Color(1.15, 3.1, 0.62, 1.0),
 			Color(0.28, 1.45, 0.22, 1.0),
-			178.0 + float(phase) * 14.0
+			178.0 + float(phase) * 14.0,
+			"venom",
+			phase >= 3
 		)
+	var volley_muzzle := global_position + Vector2(0.0, -25.0) + base_direction * 18.0
+	EnemyAttackVfx.spawn_muzzle(get_tree().current_scene, volley_muzzle, base_direction, Color(1.35, 3.25, 0.72, 1.0), Color(0.28, 1.45, 0.22, 1.0), "venom", true)
+	EnemyAttackVfx.spawn_burst(get_tree().current_scene, volley_muzzle, Color(1.35, 3.25, 0.72, 1.0), Color(0.28, 1.45, 0.22, 1.0), "venom", 10 + phase * 2, 30.0)
 	SFX.play(self, "enemy_shot", -13.5, _rng.randf_range(0.66, 0.76))
 
 func _try_contact_hit() -> void:
@@ -274,6 +293,8 @@ func _try_contact_hit() -> void:
 		return
 	var push := (_target.global_position - global_position).normalized()
 	_target.take_projectile_hit(push, 16)
+	EnemyAttackVfx.spawn_slash(get_tree().current_scene, global_position + Vector2(0.0, -22.0), push, Color(1.65, 3.2, 0.72, 1.0), Color(0.30, 1.40, 0.22, 1.0), true)
+	EnemyAttackVfx.spawn_ring(get_tree().current_scene, global_position, 16.0, Color(1.45, 3.0, 0.62, 1.0), Color(0.25, 1.28, 0.18, 1.0), 0.22, 24, 1.5)
 	_contact_time = 1.15
 
 func take_projectile_hit(direction: Vector2) -> void:
@@ -310,28 +331,11 @@ func _update_phase() -> void:
 	_spawn_phase_pulse()
 
 func _spawn_phase_pulse() -> void:
-	var ring := Line2D.new()
-	ring.width = 2.0
-	ring.default_color = Color(0.55, 3.0, 0.65, 0.82)
-	ring.antialiased = false
-	var points := PackedVector2Array()
-	for i in range(25):
-		var angle := TAU * float(i) / 24.0
-		points.append((Vector2(cos(angle), sin(angle)) * 18.0).round())
-	ring.points = points
-	ring.z_as_relative = false
-	ring.z_index = 1900
-	get_tree().current_scene.add_child(ring)
-	ring.global_position = global_position + Vector2(0.0, -18.0)
-	var additive := CanvasItemMaterial.new()
-	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
-	ring.material = additive
-	var tw := ring.create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(ring, "scale", Vector2.ONE * 3.0, 0.34)
-	tw.tween_property(ring, "modulate:a", 0.0, 0.34)
-	tw.set_parallel(false)
-	tw.tween_callback(ring.queue_free)
+	var center := global_position + Vector2(0.0, -18.0)
+	var core := Color(0.55 + float(phase) * 0.12, 3.0, 0.65, 1.0)
+	var glow := Color(0.18, 1.32, 0.20, 1.0)
+	EnemyAttackVfx.spawn_ring(get_tree().current_scene, center, 18.0, core, glow, 0.34, 28, 3.0)
+	EnemyAttackVfx.spawn_burst(get_tree().current_scene, center, core, glow, "bio", 10 + phase * 3, 32.0 + float(phase) * 5.0)
 
 func _die() -> void:
 	if _dead:
@@ -348,6 +352,9 @@ func _die() -> void:
 		if egg != null and is_instance_valid(egg) and egg.has_method("destroy_without_hatch"):
 			egg.call("destroy_without_hatch")
 	_spawn_boss_salvage()
+	var death_center := global_position + Vector2(0.0, -18.0)
+	EnemyAttackVfx.spawn_burst(get_tree().current_scene, death_center, Color(2.0, 3.2, 0.72, 1.0), Color(0.35, 1.4, 0.22, 1.0), "bio", 18, 52.0)
+	EnemyAttackVfx.spawn_ring(get_tree().current_scene, global_position, 24.0, Color(1.4, 3.0, 0.58, 1.0), Color(0.25, 1.3, 0.18, 1.0), 0.42, 32, 2.2)
 	SFX.play_explosion(self, -5.5, 0.72)
 	SFX.play(self, "enemy_die", -11.5, 0.70)
 	defeated.emit()

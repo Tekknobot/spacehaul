@@ -271,6 +271,12 @@ func _profile_life() -> float:
 		"prism":
 			return _rng.randf_range(0.9, 1.4)
 
+		"bio":
+			return _rng.randf_range(0.72, 1.08)
+
+		"venom":
+			return _rng.randf_range(0.88, 1.28)
+
 		_:
 			return _rng.randf_range(1.0, 1.5)
 
@@ -301,6 +307,10 @@ func _profile_velocity(base: Vector2, radial_dir: Vector2) -> Vector2:
 			return base * 0.35
 		"prism":
 			return base * 0.50
+		"bio":
+			return base * 0.68 + Vector2(0.0, -_rng.randf_range(2.0, 7.0))
+		"venom":
+			return base * 0.54 + radial_dir * _rng.randf_range(2.0, 8.0)
 		_:
 			return base * 0.60
 
@@ -332,6 +342,15 @@ func _apply_profile_motion(p: Dictionary, delta: float) -> void:
 				signf(sin(phase + age * 24.0)),
 				0.0
 			) * 3.0 * delta
+		"bio":
+			velocity.y -= 3.0 * delta
+			position.x += sin(phase + age * 7.0) * 2.0 * delta
+		"venom":
+			velocity *= maxf(0.0, 1.0 - 0.28 * delta)
+			position += Vector2(
+				sin(phase + age * 9.0),
+				cos(phase * 0.8 + age * 7.0) * 0.45
+			) * 2.4 * delta
 
 	p["position"] = position
 	p["velocity"] = velocity
@@ -370,6 +389,10 @@ func _gas_profile_scale() -> float:
 			return 1.22
 		"phase", "prism":
 			return 0.94
+		"bio":
+			return 1.18
+		"venom":
+			return 1.34
 		_:
 			return 1.0
 
