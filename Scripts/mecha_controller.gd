@@ -62,6 +62,63 @@ const SECONDARY_UPGRADE_LABELS := {
 	"S3": ["BLOOM II   SECOND PHASE WAVE", "BLOOM III   THIRD PHASE WAVE", "BLOOM IV   FOUR WAVES PLUS DENSITY"],
 }
 
+
+# One signature-primary Omega catalog per chassis. The UI reads this data directly,
+# while set_legendary_mutation() validates against the active chassis so mutation
+# IDs can never leak across mechas.
+const OMEGA_MUTATIONS := {
+	"M1": [
+		{"id": "omega_edge", "name": "OMEGA EDGE", "hud": "EDGE", "label": "OMEGA EDGE   TRIPLE COLOSSAL FORWARD CLEAVE"},
+		{"id": "atlas_crown", "name": "ATLAS CROWN", "hud": "CROWN", "label": "ATLAS CROWN   SIX CLEAVES ERUPT IN ALL DIRECTIONS"},
+		{"id": "world_breaker", "name": "WORLD BREAKER", "hud": "BREAK", "label": "WORLD BREAKER   CLEAVE IGNITES A FORWARD DETONATION CHAIN"},
+	],
+	"M2": [
+		{"id": "predator_grid", "name": "PREDATOR GRID", "hud": "GRID", "label": "PREDATOR GRID   THREE HARPOON FANS CARVE A WIDE KILL ZONE"},
+		{"id": "apex_reel", "name": "APEX REEL", "hud": "REEL", "label": "APEX REEL   RADIAL TETHERS IMPLODE THE CROWD INTO PANTHER"},
+		{"id": "kill_lattice", "name": "KILL LATTICE", "hud": "LATTICE", "label": "KILL LATTICE   HARPOON LINES REDETONATE BACK TOWARD THE CHASSIS"},
+	],
+	"M3": [
+		{"id": "meteor_shower", "name": "METEOR SHOWER", "hud": "SHOWER", "label": "METEOR SHOWER   FIVE COMETS HAMMER THE TARGET ZONE"},
+		{"id": "cluster_sun", "name": "CLUSTER SUN", "hud": "SUN", "label": "CLUSTER SUN   MORTAR IMPACT ERUPTS INTO A RADIAL SHRAPNEL STAR"},
+		{"id": "comet_corridor", "name": "COMET CORRIDOR", "hud": "CORRIDOR", "label": "COMET CORRIDOR   WALKING MORTAR IMPACTS ERASE A FORWARD LANE"},
+	],
+	"R1": [
+		{"id": "prism_wall", "name": "PRISM WALL", "hud": "WALL", "label": "PRISM WALL   A BROAD BANK OF LANCES SWEEPS THE ENTIRE LANE"},
+		{"id": "kaleidoscope", "name": "KALEIDOSCOPE", "hud": "KALEIDO", "label": "KALEIDOSCOPE   PRISM LANCES FIRE THROUGH EVERY DIRECTION"},
+		{"id": "refraction_engine", "name": "REFRACTION ENGINE", "hud": "REFRACT", "label": "REFRACTION ENGINE   THE MAIN LANCE BRANCHES INTO CROSSING BEAMS"},
+	],
+	"R2": [
+		{"id": "rail_annihilator", "name": "RAIL ANNIHILATOR", "hud": "RAIL", "label": "RAIL ANNIHILATOR   ONE COLOSSAL SHOT DETONATES DOWN ITS WHOLE PATH"},
+		{"id": "breach_trident", "name": "BREACH TRIDENT", "hud": "TRIDENT", "label": "BREACH TRIDENT   THREE HEAVY RAILS FRACTURE THE FORWARD ARC"},
+		{"id": "fault_engine", "name": "FAULT ENGINE", "hud": "FAULT", "label": "FAULT ENGINE   A ZIGZAGGING DECK RUPTURE WALKS THROUGH THE HORDE"},
+	],
+	"R3": [
+		{"id": "cerberus_protocol", "name": "CERBERUS PROTOCOL", "hud": "CERBERUS", "label": "CERBERUS PROTOCOL   THREE SMART MISSILE SALVOS STRIKE THE SAME HUNT"},
+		{"id": "orbital_pack", "name": "ORBITAL PACK", "hud": "PACK", "label": "ORBITAL PACK   A TWELVE-MISSILE DIVE PACK SATURATES THE TARGET ZONE"},
+		{"id": "recursive_warhead", "name": "RECURSIVE WARHEAD", "hud": "RECURSIVE", "label": "RECURSIVE WARHEAD   EVERY MISSILE IMPACT BURSTS INTO SECONDARY KILLS"},
+	],
+	"R4": [
+		{"id": "tesla_storm", "name": "TESLA STORM", "hud": "STORM", "label": "TESLA STORM   THREE ARC CASCADES RIP THROUGH SEPARATE CHAINS"},
+		{"id": "arc_web", "name": "ARC WEB", "hud": "WEB", "label": "ARC WEB   CHAINED TARGETS CROSS-LINK INTO A LETHAL ELECTRIC NET"},
+		{"id": "neural_overload", "name": "NEURAL OVERLOAD", "hud": "OVERLOAD", "label": "NEURAL OVERLOAD   THE CHAIN REVERSES AND DETONATES EVERY CONDUCTOR"},
+	],
+	"S1": [
+		{"id": "sunfire_grid", "name": "SUNFIRE GRID", "hud": "GRID", "label": "SUNFIRE GRID   NINE OVERBURN CUTTERS FORM A SOLAR EXECUTION LANE"},
+		{"id": "solar_cross", "name": "SOLAR CROSS", "hud": "CROSS", "label": "SOLAR CROSS   PHOTON CUTTERS ERUPT IN A FULL STELLAR COMPASS"},
+		{"id": "corona_breaker", "name": "CORONA BREAKER", "hud": "CORONA", "label": "CORONA BREAKER   THE RAKE IGNITES A MASSIVE FORWARD SOLAR CORONA"},
+	],
+	"S2": [
+		{"id": "black_star", "name": "BLACK STAR", "hud": "BLACKSTAR", "label": "BLACK STAR   A GIANT SINGULARITY CRUSHES THEN BLASTS THE FIELD"},
+		{"id": "orbital_prison", "name": "ORBITAL PRISON", "hud": "PRISON", "label": "ORBITAL PRISON   THE GRAVITY COLLAPSE REACQUIRES AND FOLLOWS ITS PREY"},
+		{"id": "event_horizon", "name": "EVENT HORIZON", "hud": "HORIZON", "label": "EVENT HORIZON   TWIN RIFTS TEAR A DAMAGING GRAVITY CORRIDOR"},
+	],
+	"S3": [
+		{"id": "phase_fusillade", "name": "PHASE FUSILLADE", "hud": "FUSILLADE", "label": "PHASE FUSILLADE   THREE BLINKING NEEDLE FANS STACK INTO ONE VOLLEY"},
+		{"id": "web_crown", "name": "WEB CROWN", "hud": "CROWN", "label": "WEB CROWN   PHASE NEEDLES BLINK OUTWARD THROUGH EVERY VECTOR"},
+		{"id": "ghost_swarm", "name": "GHOST SWARM", "hud": "GHOST", "label": "GHOST SWARM   REPEATING PHASE ECHOES HAUNT THE TARGET LANE"},
+	],
+}
+
 @export var mecha_id := "M1"
 @export var player_walk_speed := 92.0
 @export var player_run_speed := 138.0
@@ -302,8 +359,19 @@ func get_primary_ability_tier() -> int:
 func get_secondary_ability_tier() -> int:
 	return secondary_ability_tier
 
+func has_omega_mutations() -> bool:
+	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
+	return not choices.is_empty()
+
 func can_accept_omega_mutation() -> bool:
-	return mecha_id == "M1" and primary_ability_tier >= MAX_ABILITY_TIER and legendary_mutation.is_empty()
+	return primary_ability_tier >= MAX_ABILITY_TIER and legendary_mutation.is_empty() and has_omega_mutations()
+
+func get_omega_signature_name() -> String:
+	return get_primary_ability_name()
+
+func get_omega_mutation_choices() -> Array:
+	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
+	return choices.duplicate(true)
 
 func has_legendary_mutation() -> bool:
 	return not legendary_mutation.is_empty()
@@ -312,19 +380,28 @@ func get_legendary_mutation() -> String:
 	return legendary_mutation
 
 func get_legendary_mutation_display_name() -> String:
-	match legendary_mutation:
-		"omega_edge": return "OMEGA EDGE"
-		"atlas_crown": return "ATLAS CROWN"
-		"world_breaker": return "WORLD BREAKER"
-		_: return ""
+	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
+	for choice in choices:
+		if String(choice.get("id", "")) == legendary_mutation:
+			return String(choice.get("name", "OMEGA"))
+	return ""
+
+func get_legendary_mutation_hud_name() -> String:
+	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
+	for choice in choices:
+		if String(choice.get("id", "")) == legendary_mutation:
+			return String(choice.get("hud", "ON"))
+	return "ON"
 
 func set_legendary_mutation(mutation_id: String) -> bool:
 	if not can_accept_omega_mutation():
 		return false
-	if mutation_id not in ["omega_edge", "atlas_crown", "world_breaker"]:
-		return false
-	legendary_mutation = mutation_id
-	return true
+	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
+	for choice in choices:
+		if String(choice.get("id", "")) == mutation_id:
+			legendary_mutation = mutation_id
+			return true
+	return false
 
 func can_upgrade_primary_ability() -> bool:
 	return primary_ability_tier < MAX_ABILITY_TIER

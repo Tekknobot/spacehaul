@@ -41,9 +41,14 @@ var _upgrade_choices: Array[Dictionary] = []
 var _omega_core_stored := false
 var _omega_overlay: Control
 var _omega_title: Label
+var _omega_hint: Label
 var _omega_buttons: Array[Button] = []
 var _omega_choices: Array[Dictionary] = []
 var _hud_omega: Label
+var _omega_guide: Node2D
+var _omega_guide_arrow: Polygon2D
+var _omega_guide_glow: Polygon2D
+var _omega_guide_label: Label
 var _rng := RandomNumberGenerator.new()
 
 var _top_hud: Control
@@ -91,6 +96,7 @@ func _ready() -> void:
 	deck_banner.hide()
 	deck_banner.z_index = 1100
 	_build_compact_hud()
+	_build_omega_guidance()
 	_build_damage_overlay()
 	_build_deck_transition_overlay()
 	_build_upgrade_overlay()
@@ -111,6 +117,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_update_damage_overlay(delta)
+	_update_omega_guidance()
 
 	if _menu_open:
 		return
@@ -183,14 +190,22 @@ func can_receive_omega_core() -> bool:
 	if _game_over or _run_complete or _omega_core_stored:
 		return false
 	var active := mecha_manager.get_active_mecha()
-	if active == null or active.mecha_id != "M1":
+	if active == null:
 		return false
-	return not active.has_legendary_mutation()
+	return not active.has_legendary_mutation() and active.has_omega_mutations()
+
+func is_omega_seek_active() -> bool:
+	if _game_over or _run_complete or _omega_core_stored or _menu_open:
+		return false
+	var active := mecha_manager.get_active_mecha()
+	return active != null and active.can_accept_omega_mutation()
 
 func collect_omega_core() -> void:
 	if not can_receive_omega_core():
 		return
 	_omega_core_stored = true
+	if enemy_manager != null and enemy_manager.has_method("notify_omega_core_collected"):
+		enemy_manager.notify_omega_core_collected()
 	_update_hud()
 	_show_banner("OMEGA CORE ACQUIRED", 0.82)
 	call_deferred("_try_open_omega_mutation")
@@ -203,8 +218,10 @@ func _try_open_omega_mutation() -> void:
 	if _omega_overlay != null and _omega_overlay.visible:
 		return
 	var active := mecha_manager.get_active_mecha()
-	if active == null or not active.can_accept_omega_mutation():
-		_show_banner("OMEGA CORE STORED\nMAX PLASMA CLEAVER TO MUTATE", 0.95)
+	if active == null:
+		return
+	if not active.can_accept_omega_mutation():
+		_show_banner("OMEGA CORE STORED\nMAX %s TO MUTATE" % active.get_omega_signature_name(), 0.95)
 		return
 	_present_omega_choices()
 
@@ -763,15 +780,11 @@ func _update_hud() -> void:
 		_salvage_required
 	]
 	if active.has_legendary_mutation():
-		match active.get_legendary_mutation():
-			"omega_edge": _hud_omega.text = "OMEGA EDGE"
-			"atlas_crown": _hud_omega.text = "OMEGA CROWN"
-			"world_breaker": _hud_omega.text = "OMEGA BREAK"
-			_: _hud_omega.text = "OMEGA ON"
+		_hud_omega.text = "OMEGA %s" % active.get_legendary_mutation_hud_name()
 	elif _omega_core_stored:
 		_hud_omega.text = "OMEGA HELD"
-	elif active.mecha_id == "M1" and active.get_primary_ability_tier() >= 3:
-		# Tier III means ATLAS is eligible for a Core; it does not mean a Core has dropped.
+	elif active.get_primary_ability_tier() >= 3 and active.has_omega_mutations():
+		# Tier III means this chassis is eligible for a Core; it does not mean a Core has dropped.
 		_hud_omega.text = "OMEGA SEEK"
 	else:
 		_hud_omega.text = "OMEGA --"
@@ -813,6 +826,80 @@ func _hide_legacy_hud() -> void:
 	$HUD/Controls.hide()
 	$HUD/BottomCenter.hide()
 	$HUD/Intro.hide()
+
+func _build_omega_guidance() -> void:
+	_omega_guide = Node2D.new()
+	_omega_guide.name = "OmegaGuidance"
+	_omega_guide.z_as_relative = false
+	_omega_guide.z_index = 1450
+	_omega_guide.visible = false
+	hud.add_child(_omega_guide)
+
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+
+	_omega_guide_glow = Polygon2D.new()
+	_omega_guide_glow.polygon = PackedVector2Array([
+		Vector2(15.0, 0.0), Vector2(-7.0, -9.0), Vector2(-2.0, 0.0), Vector2(-7.0, 9.0)
+	])
+	_omega_guide_glow.color = Color(1.15, 0.12, 1.75, 0.22)
+	_omega_guide_glow.material = additive
+	_omega_guide.add_child(_omega_guide_glow)
+
+	_omega_guide_arrow = Polygon2D.new()
+	_omega_guide_arrow.polygon = PackedVector2Array([
+		Vector2(11.0, 0.0), Vector2(-5.0, -5.0), Vector2(-1.0, 0.0), Vector2(-5.0, 5.0)
+	])
+	_omega_guide_arrow.color = Color(3.2, 0.72, 3.8, 0.96)
+	_omega_guide_arrow.material = additive
+	_omega_guide.add_child(_omega_guide_arrow)
+
+	_omega_guide_label = Label.new()
+	_omega_guide_label.text = "OMEGA"
+	_omega_guide_label.position = Vector2(-30.0, 10.0)
+	_omega_guide_label.size = Vector2(60.0, 18.0)
+	_omega_guide_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_omega_guide_label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_omega_guide_label.add_theme_font_size_override("font_size", 12)
+	_omega_guide_label.add_theme_color_override("font_color", Color(1.0, 0.56, 1.0, 1.0))
+	_omega_guide.add_child(_omega_guide_label)
+
+func _update_omega_guidance() -> void:
+	if _omega_guide == null or enemy_manager == null or _menu_open or _game_over or _run_complete:
+		if _omega_guide != null:
+			_omega_guide.visible = false
+		return
+	var target := enemy_manager.get_omega_guidance_target()
+	if target == null or not is_instance_valid(target) or not target.is_inside_tree():
+		_omega_guide.visible = false
+		return
+
+	var viewport_size := get_viewport().get_visible_rect().size
+	var target_screen := target.get_global_transform_with_canvas().origin
+	var safe_rect := Rect2(Vector2(34.0, 54.0), Vector2(maxf(1.0, viewport_size.x - 68.0), maxf(1.0, viewport_size.y - 88.0)))
+	if safe_rect.has_point(target_screen):
+		_omega_guide.visible = false
+		return
+
+	var center := safe_rect.position + safe_rect.size * 0.5
+	var direction := target_screen - center
+	if direction.length_squared() <= 0.01:
+		_omega_guide.visible = false
+		return
+	var half := safe_rect.size * 0.5
+	var scale_to_edge := 99999.0
+	if absf(direction.x) > 0.001:
+		scale_to_edge = minf(scale_to_edge, half.x / absf(direction.x))
+	if absf(direction.y) > 0.001:
+		scale_to_edge = minf(scale_to_edge, half.y / absf(direction.y))
+	var edge_position := center + direction * scale_to_edge * 0.92
+	_omega_guide.position = edge_position.round()
+	_omega_guide_arrow.rotation = direction.angle()
+	_omega_guide_glow.rotation = direction.angle()
+	var pulse := 0.78 + sin(float(Time.get_ticks_msec()) * 0.008) * 0.18
+	_omega_guide.modulate.a = pulse
+	_omega_guide_label.text = "OMEGA CORE" if target.is_in_group("omega_core_pickups") else "OMEGA"
+	_omega_guide.visible = true
 
 func _build_compact_hud() -> void:
 	_top_hud = MarginContainer.new()
@@ -1185,20 +1272,20 @@ func _build_omega_overlay() -> void:
 	var font_small := load("res://Fonts/mago1.ttf") as Font
 
 	_omega_title = Label.new()
-	_omega_title.text = "OMEGA MUTATION   M1 ATLAS"
+	_omega_title.text = "OMEGA MUTATION"
 	_omega_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_omega_title.add_theme_font_override("font", font_large)
 	_omega_title.add_theme_font_size_override("font_size", 34)
 	_omega_title.add_theme_color_override("font_color", Color(1.0, 0.55, 1.0, 1.0))
 	box.add_child(_omega_title)
 
-	var hint := Label.new()
-	hint.text = "PLASMA CLEAVER // SELECT ONE LEGENDARY EVOLUTION   1  2  3"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.add_theme_font_override("font", font_small)
-	hint.add_theme_font_size_override("font_size", 15)
-	hint.add_theme_color_override("font_color", Color(0.78, 0.62, 0.82, 1.0))
-	box.add_child(hint)
+	_omega_hint = Label.new()
+	_omega_hint.text = "SIGNATURE PRIMARY // SELECT ONE LEGENDARY EVOLUTION   1  2  3"
+	_omega_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_omega_hint.add_theme_font_override("font", font_small)
+	_omega_hint.add_theme_font_size_override("font_size", 15)
+	_omega_hint.add_theme_color_override("font_color", Color(0.78, 0.62, 0.82, 1.0))
+	box.add_child(_omega_hint)
 
 	for index in range(3):
 		var button := Button.new()
@@ -1211,19 +1298,38 @@ func _build_omega_overlay() -> void:
 		_omega_buttons.append(button)
 
 func _present_omega_choices() -> void:
-	_omega_choices = [
-		{"id": "omega_edge", "label": "OMEGA EDGE   TRIPLE COLOSSAL FORWARD CLEAVE"},
-		{"id": "atlas_crown", "label": "ATLAS CROWN   SIX CLEAVES ERUPT IN ALL DIRECTIONS"},
-		{"id": "world_breaker", "label": "WORLD BREAKER   CLEAVE IGNITES A FORWARD DETONATION CHAIN"},
-	]
+	var active := mecha_manager.get_active_mecha()
+	if active == null:
+		return
+
+	_omega_choices.assign(active.get_omega_mutation_choices())
+
+	if _omega_choices.is_empty():
+		return
+
+	_omega_title.text = "OMEGA MUTATION   %s" % active.get_display_name()
+
+	if _omega_hint != null:
+		_omega_hint.text = "%s // SELECT ONE LEGENDARY EVOLUTION   1  2  3" % active.get_omega_signature_name()
+
 	for i in range(_omega_buttons.size()):
-		_omega_buttons[i].text = "%d   %s" % [i + 1, String(_omega_choices[i]["label"])]
-		_omega_buttons[i].disabled = false
+		if i < _omega_choices.size():
+			_omega_buttons[i].text = "%d   %s" % [
+				i + 1,
+				String(_omega_choices[i].get("label", "OMEGA MUTATION"))
+			]
+			_omega_buttons[i].disabled = false
+		else:
+			_omega_buttons[i].text = "%d   --" % [i + 1]
+			_omega_buttons[i].disabled = true
+
+	if _omega_guide != null:
+		_omega_guide.visible = false
 	_omega_overlay.show()
 	_omega_buttons[0].grab_focus()
 	SFX.play_ui(self, "level", -4.0, 0.66)
 	get_tree().paused = true
-
+	
 func _choose_omega_mutation(index: int) -> void:
 	if _omega_overlay == null or not _omega_overlay.visible:
 		return
@@ -1298,6 +1404,8 @@ func _present_upgrade_choices() -> void:
 			_upgrade_buttons[i].disabled = true
 
 	_upgrade_title.text = "SALVAGE LEVEL %02d" % _level
+	if _omega_guide != null:
+		_omega_guide.visible = false
 	_upgrade_overlay.show()
 	_upgrade_buttons[0].grab_focus()
 	get_tree().paused = true

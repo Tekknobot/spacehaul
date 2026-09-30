@@ -7,6 +7,7 @@ const EnemyProjectileScript = preload("res://Scripts/enemy_projectile.gd")
 const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
 const SFX = preload("res://Scripts/sound_fx.gd")
 const EnemyAttackVfx = preload("res://Scripts/enemy_attack_vfx.gd")
+const ParticleScript = preload("res://Scripts/ability_particle_emitter.gd")
 
 const FRAME_SIZE := Vector2(32.0, 32.0)
 const FRAME_COUNT := 8
@@ -45,6 +46,7 @@ var projectile_color := Color(1.3, 3.0, 1.2, 1.0)
 var projectile_glow := Color(0.25, 1.3, 0.35, 1.0)
 var salvage_value := 1
 var elite := false
+var omega_carrier := false
 
 var _target: MechaController
 var _dead := false
@@ -65,6 +67,13 @@ var _base_sprite_position := Vector2(0.0, -12.0)
 var _health_bar_time := 0.0
 var _telegraphing := false
 var _base_modulate := Color.WHITE
+var _omega_fx_time := 0.0
+var _omega_beam: Line2D
+var _omega_beam_glow: Line2D
+var _omega_ring: Line2D
+var _omega_ring_glow: Line2D
+var _omega_orbit_lines: Array[Line2D] = []
+var _omega_label: Label
 
 func _ready() -> void:
 	add_to_group("enemies")
@@ -88,6 +97,9 @@ func _physics_process(delta: float) -> void:
 	_update_depth_order()
 	if _dead:
 		return
+
+	if omega_carrier:
+		_update_omega_carrier_vfx(delta)
 
 	_attack_time = maxf(0.0, _attack_time - delta)
 	if _health_bar_time > 0.0:
@@ -640,6 +652,89 @@ func _spawn_salvage() -> void:
 	parent_node.add_child(pickup)
 	pickup.setup(global_position + Vector2(0.0, -6.0), salvage_value)
 
+func make_omega_carrier(health_multiplier: float = 1.35) -> void:
+	if omega_carrier:
+		return
+	omega_carrier = true
+	elite = true
+	add_to_group("omega_carriers")
+	health = maxi(health + 4, int(ceil(float(health) * maxf(1.0, health_multiplier))))
+	max_health = health
+	move_speed *= 1.04
+	salvage_value += 2
+	animated_sprite.scale = Vector2.ONE * 1.32
+	_base_modulate = Color(1.22, 0.72, 1.38, 1.0)
+	animated_sprite.modulate = _base_modulate
+	_build_omega_carrier_vfx()
+	queue_redraw()
+
+func is_omega_carrier() -> bool:
+	return omega_carrier
+
+func _build_omega_carrier_vfx() -> void:
+	if _omega_label != null:
+		return
+
+	# Carrier should look special, but should NOT resemble the dropped Omega Core.
+	# The actual Core beacon/beam only appears after this enemy dies.
+
+	_omega_label = Label.new()
+	_omega_label.text = "OMEGA CARRIER"
+	_omega_label.position = Vector2(-44.0, -58.0)
+	_omega_label.size = Vector2(88.0, 16.0)
+	_omega_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_omega_label.add_theme_font_override(
+		"font",
+		load("res://Fonts/mago1.ttf") as Font
+	)
+	_omega_label.add_theme_font_size_override("font_size", 10)
+	_omega_label.add_theme_color_override(
+		"font_color",
+		Color(1.0, 0.52, 1.0, 1.0)
+	)
+	
+func _make_omega_ring(width: float, color: Color, radius: float) -> Line2D:
+	var line := Line2D.new()
+	line.width = width
+	line.default_color = color
+	line.antialiased = false
+	line.points = PackedVector2Array([
+		Vector2(0.0, -radius * 0.42),
+		Vector2(radius, 0.0),
+		Vector2(0.0, radius * 0.42),
+		Vector2(-radius, 0.0),
+		Vector2(0.0, -radius * 0.42),
+	])
+	return line
+
+func _update_omega_carrier_vfx(delta: float) -> void:
+	_omega_fx_time += delta
+	var pulse := 0.72 + sin(_omega_fx_time * 7.5) * 0.20
+	if _omega_beam != null:
+		_omega_beam.modulate.a = 0.72 + pulse * 0.25
+		_omega_beam.set_point_position(1, Vector2(0.0, -72.0 + sin(_omega_fx_time * 5.0) * 3.0))
+	if _omega_beam_glow != null:
+		_omega_beam_glow.modulate.a = 0.70 + pulse * 0.22
+	if _omega_ring != null:
+		_omega_ring.modulate.a = 0.72 + pulse * 0.26
+	if _omega_ring_glow != null:
+		_omega_ring_glow.modulate.a = 0.62 + pulse * 0.24
+	for i in range(_omega_orbit_lines.size()):
+		var line := _omega_orbit_lines[i]
+		var angle := _omega_fx_time * (1.9 + float(i) * 0.16) + TAU * float(i) / 3.0
+		var radius := 12.0 + float(i) * 2.5
+		var a := Vector2(cos(angle), sin(angle) * 0.44) * radius + Vector2(0.0, -12.0)
+		var b := Vector2(cos(angle + 0.72), sin(angle + 0.72) * 0.44) * (radius + 3.0) + Vector2(0.0, -12.0)
+		line.set_point_position(0, a.round())
+		line.set_point_position(1, b.round())
+
+	if fmod(_omega_fx_time, 0.85) < delta:
+		var root := get_tree().current_scene
+		if root != null:
+			var emitter := ParticleScript.new() as SpacehaulAbilityParticles
+			root.add_child(emitter)
+			emitter.setup_burst(global_position + Vector2(0.0, -10.0), Color(3.2, 1.0, 3.8, 1.0), Color(1.1, 0.16, 1.7, 0.9), "phase", 5, 15.0, 0.28)
+
 func apply_difficulty(run_time: float, deck_number: int, make_elite: bool = false) -> void:
 	var phase := maxi(0, int(floor(run_time / 180.0)))
 	health += mini(5, phase)
@@ -670,11 +765,11 @@ func _draw() -> void:
 	if not elite and _health_bar_time <= 0.0:
 		return
 	var ratio := clampf(float(health) / float(max_health), 0.0, 1.0)
-	var width := 18.0 if not elite else 24.0
-	var y := -31.0 if not elite else -34.0
+	var width := 18.0 if not elite else (28.0 if omega_carrier else 24.0)
+	var y := -31.0 if not elite else (-37.0 if omega_carrier else -34.0)
 	draw_rect(Rect2(Vector2(-width * 0.5 - 1.0, y - 1.0), Vector2(width + 2.0, 4.0)), Color(0.02, 0.025, 0.035, 0.9), true)
 	draw_rect(Rect2(Vector2(-width * 0.5, y), Vector2(width, 2.0)), Color(0.22, 0.08, 0.06, 0.95), true)
-	var bar_color := Color(1.0, 0.78, 0.28, 1.0) if elite else Color(0.95, 0.30, 0.20, 1.0)
+	var bar_color := Color(3.0, 0.62, 3.5, 1.0) if omega_carrier else (Color(1.0, 0.78, 0.28, 1.0) if elite else Color(0.95, 0.30, 0.20, 1.0))
 	draw_rect(Rect2(Vector2(-width * 0.5, y), Vector2(maxf(1.0, width * ratio), 2.0)), bar_color, true)
 
 func _build_animation() -> void:

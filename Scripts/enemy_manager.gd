@@ -21,6 +21,8 @@ const RUN_DURATION := 20.0 * 60.0
 @export var omega_core_drops_enabled := true
 @export_range(120.0, 600.0, 15.0) var first_omega_core_time := 270.0
 @export_range(180.0, 600.0, 15.0) var omega_core_interval := 330.0
+@export_range(0.5, 5.0, 0.25) var omega_carrier_spawn_delay := 1.5
+@export_range(1.10, 1.75, 0.05) var omega_carrier_health_multiplier := 1.35
 
 @onready var deck: ProceduralDeck = get_node(deck_path) as ProceduralDeck
 
@@ -34,6 +36,10 @@ var _next_elite_time := 180.0
 var _broodmother_spawned := false
 var _broodmother: SpacehaulBroodmother
 var _next_omega_core_time := 270.0
+var _omega_carrier: SpacehaulEnemy
+var _omega_carrier_pending := false
+var _omega_carrier_timer := 0.0
+var _omega_core_in_world := false
 
 # Encounter-director state. Ordinary population refill happens in same-species
 # packs; the event layer periodically creates a more legible swarm from one,
@@ -81,6 +87,7 @@ func _process(delta: float) -> void:
 	if run_time < opening_grace_seconds:
 		return
 
+	_update_omega_carrier_director(delta, run_time)
 	_update_swarm_director(delta, run_time)
 	_update_population_director(delta, run_time)
 
@@ -88,6 +95,10 @@ func reset_run() -> void:
 	total_kills = 0
 	_next_elite_time = 180.0
 	_next_omega_core_time = first_omega_core_time
+	_omega_carrier = null
+	_omega_carrier_pending = false
+	_omega_carrier_timer = 0.0
+	_omega_core_in_world = false
 	_spawning_enabled = true
 	_broodmother_spawned = false
 	_clear_boss_encounter()
@@ -106,6 +117,10 @@ func prepare_video_capture_state(run_time: float) -> void:
 	_spawning_enabled = true
 	_clear_boss_encounter()
 	_clear_population()
+	_omega_carrier = null
+	_omega_carrier_pending = false
+	_omega_carrier_timer = 0.0
+	_omega_core_in_world = false
 	_cancel_swarm_event()
 	_deck_grace = 0.0
 	_spawn_timer = 0.0
@@ -134,6 +149,10 @@ func _clear_population() -> void:
 		if enemy != null and is_instance_valid(enemy):
 			enemy.queue_free()
 	enemies.clear()
+	_omega_carrier = null
+	_omega_carrier_pending = false
+	_omega_carrier_timer = 0.0
+	_omega_core_in_world = false
 	for child in get_children():
 		if child.is_in_group("salvage_pickups") or child.is_in_group("omega_core_pickups"):
 			child.queue_free()
@@ -154,6 +173,92 @@ func _cleanup_dead_references() -> void:
 		if enemy != null and is_instance_valid(enemy) and not enemy.is_queued_for_deletion():
 			alive.append(enemy)
 	enemies = alive
+	if _omega_carrier != null and (not is_instance_valid(_omega_carrier) or _omega_carrier.is_queued_for_deletion()):
+		_omega_carrier = null
+
+# -----------------------------------------------------------------------------
+# Omega carrier director
+# -----------------------------------------------------------------------------
+
+func _update_omega_carrier_director(delta: float, run_time: float) -> void:
+	if not omega_core_drops_enabled or run_time < _next_omega_core_time:
+		return
+	if _omega_core_in_world or _has_omega_core_pickup():
+		_omega_core_in_world = true
+		return
+	if _omega_carrier != null and is_instance_valid(_omega_carrier) and not _omega_carrier.is_queued_for_deletion():
+		return
+	if not _omega_seek_is_active():
+		_omega_carrier_pending = false
+		_omega_carrier_timer = 0.0
+		return
+
+	if not _omega_carrier_pending:
+		_omega_carrier_pending = true
+		_omega_carrier_timer = omega_carrier_spawn_delay
+		_show_omega_banner("OMEGA SIGNATURE ACQUIRED", 0.76)
+		return
+
+	_omega_carrier_timer = maxf(0.0, _omega_carrier_timer - delta)
+	if _omega_carrier_timer <= 0.0:
+		_spawn_omega_carrier(run_time)
+
+func _spawn_omega_carrier(run_time: float) -> void:
+	_omega_carrier_pending = false
+	_omega_carrier_timer = 0.0
+	if deck == null or is_boss_active() or not _omega_seek_is_active():
+		return
+	var player := get_tree().get_first_node_in_group("player_mecha") as MechaController
+	if player == null:
+		return
+	var spawn_position := deck.get_random_enemy_spawn_position(player.global_position, minimum_spawn_distance_cells + 2, _rng)
+	if spawn_position == Vector2.ZERO:
+		spawn_position = deck.get_random_walkable_position_near(player.global_position, minimum_spawn_distance_cells + 2, _rng)
+	if spawn_position == Vector2.ZERO:
+		_omega_carrier_pending = true
+		_omega_carrier_timer = 1.0
+		return
+
+	var carrier_type := _choose_omega_carrier_type(run_time)
+	var carrier := _spawn_enemy_at(spawn_position, carrier_type, run_time, true)
+	if carrier == null:
+		_omega_carrier_pending = true
+		_omega_carrier_timer = 1.0
+		return
+	carrier.make_omega_carrier(omega_carrier_health_multiplier)
+	_omega_carrier = carrier
+	_next_elite_time = maxf(_next_elite_time, run_time + 45.0)
+	_show_omega_banner("OMEGA CARRIER LOCATED", 1.05)
+	SFX.play_ui(self, "warning", -8.0, 1.18)
+
+func _choose_omega_carrier_type(run_time: float) -> String:
+	var candidates: Array = []
+	if run_time < 480.0:
+		candidates = ["beetle_1", "bug_3", "spider_2"]
+	elif run_time < 900.0:
+		candidates = ["beetle_1", "bug_4", "spider_2", "spider_3"]
+	else:
+		candidates = ["beetle_1", "bug_4", "spider_3", "bug_3"]
+	return candidates[_rng.randi_range(0, candidates.size() - 1)]
+
+func _omega_seek_is_active() -> bool:
+	var managers := get_tree().get_nodes_in_group("survival_manager")
+	if managers.is_empty():
+		return false
+	if managers[0].has_method("is_omega_seek_active"):
+		return bool(managers[0].call("is_omega_seek_active"))
+	return false
+
+func _has_omega_core_pickup() -> bool:
+	for child in get_children():
+		if child.is_in_group("omega_core_pickups") and not child.is_queued_for_deletion():
+			return true
+	return false
+
+func _show_omega_banner(message: String, hold_time: float) -> void:
+	var managers := get_tree().get_nodes_in_group("survival_manager")
+	if not managers.is_empty() and managers[0].has_method("_show_banner"):
+		managers[0].call("_show_banner", message, hold_time)
 
 # -----------------------------------------------------------------------------
 # Population director
@@ -471,7 +576,7 @@ func _spawn_enemy_at(spawn_position: Vector2, enemy_type: String, run_time: floa
 	enemy.position = spawn_position.round()
 	add_child(enemy)
 	enemy.apply_difficulty(run_time, _get_deck_number(), make_elite)
-	enemy.defeated.connect(_on_enemy_defeated)
+	enemy.defeated.connect(_on_enemy_defeated.bind(enemy))
 	enemies.append(enemy)
 	return enemy
 
@@ -512,6 +617,9 @@ func _trim_population_for_boss(keep_count: int) -> void:
 	for enemy in enemies:
 		if enemy == null or not is_instance_valid(enemy) or enemy.is_queued_for_deletion():
 			continue
+		if enemy == _omega_carrier:
+			kept += 1
+			continue
 		if kept < keep_count:
 			kept += 1
 			continue
@@ -535,9 +643,8 @@ func _on_broodmother_defeated() -> void:
 	if _broodmother != null and is_instance_valid(_broodmother):
 		boss_position = _broodmother.global_position
 	_broodmother = null
-	if boss_position != Vector2.ZERO and _omega_drop_is_useful():
+	if boss_position != Vector2.ZERO and not _omega_core_in_world and _omega_carrier == null and _omega_seek_is_active():
 		_spawn_omega_core(boss_position)
-		_next_omega_core_time = _get_run_time() + omega_core_interval
 	_spawn_timer = 1.25
 	_deck_grace = 2.0
 	_next_swarm_time = maxf(_next_swarm_time, _get_run_time() + 12.0)
@@ -622,17 +729,15 @@ func _spawn_interval(run_time: float) -> float:
 		interval += 0.55
 	return clampf(interval, 0.62, 2.15)
 
-func _on_enemy_defeated(_salvage_value: int, was_elite: bool, death_position: Vector2) -> void:
+func _on_enemy_defeated(_salvage_value: int, _was_elite: bool, death_position: Vector2, enemy: SpacehaulEnemy) -> void:
 	total_kills += 1
-	if not was_elite or not omega_core_drops_enabled:
+	if enemy == null or not enemy.is_omega_carrier():
 		return
-	var run_time := _get_run_time()
-	if run_time < _next_omega_core_time:
-		return
-	if not _omega_drop_is_useful():
+	if enemy == _omega_carrier:
+		_omega_carrier = null
+	if not omega_core_drops_enabled or not _omega_drop_is_useful():
 		return
 	_spawn_omega_core(death_position)
-	_next_omega_core_time = run_time + omega_core_interval
 
 func _omega_drop_is_useful() -> bool:
 	var managers := get_tree().get_nodes_in_group("survival_manager")
@@ -643,14 +748,28 @@ func _omega_drop_is_useful() -> bool:
 	return false
 
 func _spawn_omega_core(world_position: Vector2) -> void:
+	if _omega_core_in_world or _has_omega_core_pickup():
+		return
 	var core := OMEGA_CORE_SCRIPT.new() as SpaceMechaOmegaCorePickup
 	if core == null:
 		return
 	add_child(core)
 	core.setup(world_position + Vector2(0.0, -7.0))
-	var managers := get_tree().get_nodes_in_group("survival_manager")
-	if not managers.is_empty() and managers[0].has_method("_show_banner"):
-		managers[0].call("_show_banner", "OMEGA SIGNATURE DETECTED", 0.82)
+	_omega_core_in_world = true
+	_show_omega_banner("OMEGA CORE RELEASED", 0.95)
+
+func notify_omega_core_collected() -> void:
+	_omega_core_in_world = false
+	_omega_carrier_pending = false
+	_omega_carrier_timer = 0.0
+
+func get_omega_guidance_target() -> Node2D:
+	if _omega_carrier != null and is_instance_valid(_omega_carrier) and not _omega_carrier.is_queued_for_deletion():
+		return _omega_carrier
+	for child in get_children():
+		if child is Node2D and child.is_in_group("omega_core_pickups") and not child.is_queued_for_deletion():
+			return child as Node2D
+	return null
 
 func _get_run_time() -> float:
 	var managers := get_tree().get_nodes_in_group("survival_manager")

@@ -945,6 +945,362 @@ func _ability_impact_fx(
 		radius * impact_scale
 	)
 		
+
+# -----------------------------------------------------------------------------
+# OMEGA LEGENDARY PRIMARY MUTATIONS — ROSTER EXPANSION
+# Every chassis keeps its Tier III primary as the prerequisite, then replaces
+# that attack with one of three geometry/rule-changing legendary behaviors.
+# -----------------------------------------------------------------------------
+
+# M2 PANTHER // VECTOR HARPOONS
+func _m2_legendary_predator_grid(base_direction: Vector2) -> void:
+	var saved_direction := direction
+	for fan_angle in [-0.42, 0.0, 0.42]:
+		direction = base_direction.rotated(float(fan_angle)).normalized()
+		var ends: Array[Vector2] = []
+		for i in range(5):
+			var f := float(i) / 4.0 - 0.5
+			ends.append((origin + IsoVfx.ground_vector(direction, 194.0, f * deg_to_rad(34.0))).round())
+		await _m2_project_vector_harpoons(ends, 3, 0.11)
+		await _sleep(0.018)
+	direction = saved_direction
+	_pulse_ring(owner_ground, 54.0, Color(1.55, 3.2, 3.45, 1.0), Color(0.18, 1.0, 1.55, 0.24), 0.16, 28)
+
+func _m2_legendary_apex_reel(base_direction: Vector2) -> void:
+	var ends: Array[Vector2] = []
+	var count := 14
+	for i in range(count):
+		var angle := base_direction.angle() + TAU * float(i) / float(count)
+		ends.append(IsoVfx.ground_point(owner_ground, angle, 154.0).round())
+	await _m2_project_vector_harpoons(ends, 3, 0.14)
+	_pulse_ring(owner_ground, 154.0, Color(1.45, 3.05, 3.4, 1.0), Color(0.2, 0.9, 1.6, 0.24), 0.15, 40)
+	_radial_hit(owner_ground, 160.0, false)
+	await _sleep(0.05)
+	_explode(owner_ground, Color(2.0, 3.35, 3.5, 1.0), Color(0.2, 1.0, 1.65, 1.0), 30.0, 34.0)
+
+func _m2_legendary_kill_lattice(base_direction: Vector2) -> void:
+	var ends: Array[Vector2] = []
+	for i in range(9):
+		var f := float(i) / 8.0 - 0.5
+		ends.append((origin + IsoVfx.ground_vector(base_direction, 208.0, f * deg_to_rad(56.0))).round())
+	await _m2_project_vector_harpoons(ends, 3, 0.13)
+	for stage in range(4):
+		var t := 1.0 - float(stage) * 0.22
+		for end in ends:
+			var at := origin.lerp(end, t).round()
+			_ability_impact_fx(at, Color(1.45, 3.1, 3.4, 1.0), Color(0.18, 0.95, 1.55, 1.0), 7.0 + float(stage))
+			if stage == 2:
+				_damage_line(end, origin, 5.0)
+		await _sleep(0.028)
+	_explode(owner_ground, Color(1.8, 3.3, 3.5, 1.0), Color(0.2, 1.0, 1.6, 1.0), 25.0, 28.0)
+
+# M3 COMET // COMET MORTAR
+func _m3_legendary_meteor_shower(base_direction: Vector2) -> void:
+	var center := _target_clamped(286.0)
+	_show_target_lock(center, Color(3.4, 2.1, 0.7, 1.0), Color(1.7, 0.42, 0.08, 1.0))
+	for i in range(5):
+		var angle := TAU * float(i) / 5.0 + 0.3
+		var offset := Vector2.ZERO if i == 0 else IsoVfx.ground_offset(angle, 34.0 + float(i % 2) * 12.0)
+		await _arc_shot_from(origin, (center + offset).round(), 92.0 + float(i) * 5.0, 0.16, Color(3.4, 1.55, 0.35, 1.0), Color(1.7, 0.38, 0.08, 1.0), 22.0)
+		await _sleep(0.015)
+	_pulse_ring(center, 64.0, Color(3.5, 2.2, 0.8, 1.0), Color(1.7, 0.45, 0.08, 0.24), 0.18, 34)
+
+func _m3_legendary_cluster_sun(base_direction: Vector2) -> void:
+	var dest := await _arc_shot_from(origin, _target_clamped(280.0), 112.0, 0.28, Color(3.6, 1.7, 0.38, 1.0), Color(1.8, 0.4, 0.08, 1.0), 34.0)
+	_pulse_ring(dest, 74.0, Color(3.6, 2.3, 0.75, 1.0), Color(1.8, 0.45, 0.08, 0.25), 0.18, 40)
+	for i in range(16):
+		var angle := TAU * float(i) / 16.0
+		var end := IsoVfx.ground_point(dest, angle, 76.0).round()
+		var ray := _line(dest, end, Color(3.4, 1.65, 0.42, 0.95), Color(1.7, 0.38, 0.08, 0.18))
+		_damage_line(dest, end, 4.5)
+		_explode(end, Color(3.35, 1.45, 0.35, 1.0), Color(1.65, 0.34, 0.07, 1.0), 10.0, 10.0)
+		_fade_free(ray, 0.13)
+
+func _m3_legendary_comet_corridor(base_direction: Vector2) -> void:
+	for i in range(7):
+		var distance := 54.0 + float(i) * 33.0
+		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, sin(float(i) * 1.8) * 10.0)
+		var dest := (origin + IsoVfx.ground_vector(base_direction, distance) + lateral).round()
+		await _arc_shot_from(origin, dest, 58.0 + float(i) * 5.0, 0.105, Color(3.35, 1.45, 0.32, 1.0), Color(1.65, 0.35, 0.07, 1.0), 18.0 + float(i) * 1.2)
+		await _sleep(0.012)
+
+# R1 PRISM // PRISM LANCE
+func _r1_legendary_prism_wall(base_direction: Vector2) -> void:
+	for i in range(11):
+		var offset := (float(i) - 5.0) * 8.0
+		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, offset)
+		var start := (origin + lateral).round()
+		var end := (start + IsoVfx.ground_vector(base_direction, 244.0)).round()
+		await _straight_shot_from(start, end, Color(1.35, 3.25, 3.5, 1.0), Color(0.2, 1.0, 1.65, 1.0), 0.042, 10.0)
+	_pulse_ring(owner_ground + IsoVfx.ground_vector(base_direction, 220.0), 30.0, Color(1.7, 3.4, 3.55, 1.0), Color(0.2, 1.0, 1.6, 0.22), 0.14, 24)
+
+func _r1_legendary_kaleidoscope(base_direction: Vector2) -> void:
+	for i in range(12):
+		var aim := base_direction.rotated(TAU * float(i) / 12.0)
+		var end := (origin + IsoVfx.ground_vector(aim, 210.0)).round()
+		await _straight_shot_from(origin, end, Color(1.45, 3.15, 3.5, 1.0), Color(0.2, 0.95, 1.65, 1.0), 0.036, 11.0)
+	_pulse_ring(owner_ground, 106.0, Color(1.8, 3.4, 3.6, 1.0), Color(0.2, 1.0, 1.7, 0.25), 0.17, 36)
+	_radial_hit(owner_ground, 108.0, true)
+
+func _r1_legendary_refraction_engine(base_direction: Vector2) -> void:
+	var main_end := (origin + IsoVfx.ground_vector(base_direction, 278.0)).round()
+	var main := _line(origin, main_end, Color(1.65, 3.35, 3.6, 1.0), Color(0.22, 1.0, 1.7, 0.30))
+	_damage_line(origin, main_end, 7.0)
+	_fade_free(main, 0.24)
+	for stage in range(1, 4):
+		var node := origin.lerp(main_end, float(stage) / 4.0).round()
+		for side in [-1.0, 1.0]:
+			var branch_dir := base_direction.rotated(side * (0.42 + float(stage) * 0.10))
+			var branch_end := (node + IsoVfx.ground_vector(branch_dir, 82.0 + float(stage) * 13.0)).round()
+			var branch := _line(node, branch_end, Color(1.4, 3.15, 3.5, 0.96), Color(0.2, 0.95, 1.6, 0.20))
+			_damage_line(node, branch_end, 5.0)
+			_explode(branch_end, Color(1.5, 3.2, 3.5, 1.0), Color(0.2, 0.95, 1.6, 1.0), 12.0, 11.0)
+			_fade_free(branch, 0.17)
+		await _sleep(0.025)
+	_explode(main_end, Color(1.9, 3.5, 3.65, 1.0), Color(0.22, 1.0, 1.7, 1.0), 26.0, 24.0)
+
+# R2 BREACHER // BREACH CANNON
+func _r2_legendary_rail_annihilator(base_direction: Vector2) -> void:
+	var end := (origin + IsoVfx.ground_vector(base_direction, 330.0)).round()
+	var rail := _line(origin, end, Color(3.7, 2.35, 0.82, 1.0), Color(1.9, 0.5, 0.08, 0.34))
+	_damage_line(origin, end, 11.0)
+	_fade_free(rail, 0.28)
+	for i in range(8):
+		var at := origin.lerp(end, float(i + 1) / 8.0).round()
+		_explode(at, Color(3.6, 1.7, 0.40, 1.0), Color(1.8, 0.42, 0.07, 1.0), 16.0 + float(i) * 1.4, 14.0)
+		await _sleep(0.022)
+
+func _r2_legendary_breach_trident(base_direction: Vector2) -> void:
+	for angle in [-0.18, 0.0, 0.18]:
+		var aim := base_direction.rotated(float(angle)).normalized()
+		var end := (origin + IsoVfx.ground_vector(aim, 286.0)).round()
+		var rail := _line(origin, end, Color(3.55, 2.1, 0.70, 1.0), Color(1.8, 0.45, 0.08, 0.30))
+		_damage_line(origin, end, 8.0)
+		_explode(end, Color(3.5, 1.6, 0.38, 1.0), Color(1.75, 0.4, 0.07, 1.0), 29.0, 28.0)
+		_fade_free(rail, 0.20)
+		await _sleep(0.035)
+
+func _r2_legendary_fault_engine(base_direction: Vector2) -> void:
+	var cursor := origin.round()
+	for i in range(8):
+		var distance := 34.0 * float(i + 1)
+		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, (18.0 if i % 2 == 0 else -18.0) + sin(float(i)) * 5.0)
+		var next := (origin + IsoVfx.ground_vector(base_direction, distance) + lateral).round()
+		var fault := _line(cursor, next, Color(3.45, 1.85, 0.55, 0.96), Color(1.75, 0.42, 0.07, 0.22))
+		_damage_line(cursor, next, 7.0)
+		_explode(next, Color(3.4, 1.5, 0.34, 1.0), Color(1.7, 0.38, 0.06, 1.0), 15.0 + float(i), 14.0)
+		_fade_free(fault, 0.16)
+		cursor = next
+		await _sleep(0.028)
+
+# R3 HUNTER // HUNTER MISSILES
+func _omega_hunter_fill_pack(count: int, max_range: float, destinations: Array[Vector2], tracking_ids: Array[int]) -> void:
+	var used: Dictionary = {}
+	var aim := _target_clamped(max_range)
+	for i in range(count):
+		var enemy := _nearest_unused_enemy(aim, max_range, max_range, used)
+		if enemy != null and is_instance_valid(enemy):
+			var id := enemy.get_instance_id()
+			used[id] = true
+			destinations.append(enemy.global_position.round())
+			tracking_ids.append(id)
+			_show_target_lock(enemy.global_position, Color(1.5, 2.9, 3.4, 0.9), Color(0.2, 0.85, 1.55, 0.7))
+		else:
+			var angle := TAU * float(i) / float(maxi(1, count))
+			destinations.append((aim + IsoVfx.ground_offset(angle, 18.0 + float(i % 3) * 8.0)).round())
+			tracking_ids.append(0)
+
+func _r3_legendary_cerberus_protocol(base_direction: Vector2) -> void:
+	var destinations: Array[Vector2] = []
+	var tracking_ids: Array[int] = []
+	_omega_hunter_fill_pack(6, 310.0, destinations, tracking_ids)
+	for salvo in range(3):
+		await _r3_run_dive_salvo(destinations, tracking_ids, 3, 0.022, 13.0 + float(salvo) * 2.0, salvo == 0)
+		await _sleep(0.025)
+
+func _r3_legendary_orbital_pack(base_direction: Vector2) -> void:
+	var destinations: Array[Vector2] = []
+	var tracking_ids: Array[int] = []
+	_omega_hunter_fill_pack(12, 320.0, destinations, tracking_ids)
+	await _r3_run_dive_salvo(destinations, tracking_ids, 3, 0.018, 15.0, true)
+	_pulse_ring(owner_ground, 54.0, Color(1.65, 3.0, 3.4, 1.0), Color(0.2, 0.85, 1.55, 0.22), 0.15, 30)
+
+func _r3_legendary_recursive_warhead(base_direction: Vector2) -> void:
+	var destinations: Array[Vector2] = []
+	var tracking_ids: Array[int] = []
+	_omega_hunter_fill_pack(6, 310.0, destinations, tracking_ids)
+	await _r3_run_dive_salvo(destinations, tracking_ids, 3, 0.026, 15.0, true)
+	for center in destinations:
+		for j in range(3):
+			var angle := TAU * float(j) / 3.0 + 0.35
+			var end := IsoVfx.ground_point(center, angle, 30.0).round()
+			var fragment := _line(center, end, Color(1.7, 3.0, 3.35, 0.9), Color(0.2, 0.8, 1.5, 0.18))
+			_damage_line(center, end, 4.0)
+			_explode(end, Color(1.7, 2.9, 3.3, 1.0), Color(0.2, 0.8, 1.5, 1.0), 9.0, 9.0)
+			_fade_free(fragment, 0.12)
+		await _sleep(0.012)
+
+# R4 CASCADE // ARC CASCADE
+func _r4_omega_render_chain(chain: PackedVector2Array, core: Color, glow: Color, radius: float = 6.0) -> void:
+	if chain.size() <= 1:
+		return
+	var lightning := PackedVector2Array()
+	for segment_index in range(chain.size() - 1):
+		var jagged := _jagged_segment_points(chain[segment_index], chain[segment_index + 1], 7.0)
+		for j in range(jagged.size()):
+			if segment_index > 0 and j == 0:
+				continue
+			lightning.append(jagged[j])
+		_damage_line(chain[segment_index], chain[segment_index + 1], radius)
+		_explode(chain[segment_index + 1], core, glow, 12.0, 11.0)
+	var arc := _polyline(lightning, core, Color(glow.r, glow.g, glow.b, 0.34))
+	_fade_free(arc, 0.22)
+
+func _r4_legendary_tesla_storm(base_direction: Vector2) -> void:
+	var saved_target := target
+	for offset in [-92.0, 0.0, 92.0]:
+		target = saved_target + IsoVfx.ground_perpendicular_offset(base_direction, float(offset))
+		var chain := _chain_enemy_points(9, 290.0, 150.0)
+		if chain.size() <= 1:
+			chain.append(_target_clamped(260.0))
+		_r4_omega_render_chain(chain, Color(2.9, 1.75, 3.65, 1.0), Color(1.15, 0.28, 1.9, 1.0), 6.0)
+		await _sleep(0.035)
+	target = saved_target
+
+func _r4_legendary_arc_web(base_direction: Vector2) -> void:
+	var chain := _chain_enemy_points(11, 300.0, 158.0)
+	if chain.size() <= 1:
+		chain.append(_target_clamped(270.0))
+	_r4_omega_render_chain(chain, Color(2.85, 1.65, 3.65, 1.0), Color(1.1, 0.28, 1.9, 1.0), 6.0)
+	if chain.size() >= 4:
+		for i in range(chain.size() - 2):
+			if i % 2 != 0:
+				continue
+			var cross := _line(chain[i], chain[i + 2], Color(2.7, 1.55, 3.5, 0.78), Color(1.0, 0.25, 1.75, 0.18))
+			_damage_line(chain[i], chain[i + 2], 5.0)
+			_fade_free(cross, 0.18)
+
+func _r4_legendary_neural_overload(base_direction: Vector2) -> void:
+	var chain := _chain_enemy_points(12, 310.0, 160.0)
+	if chain.size() <= 1:
+		chain.append(_target_clamped(275.0))
+	_r4_omega_render_chain(chain, Color(3.0, 1.8, 3.7, 1.0), Color(1.15, 0.30, 1.95, 1.0), 6.5)
+	for pass_index in range(2):
+		for i in range(chain.size() - 1, 0, -1):
+			_explode(chain[i], Color(3.1, 1.55, 3.7, 1.0), Color(1.2, 0.28, 1.95, 1.0), 14.0 + float(pass_index) * 3.0, 13.0)
+			await _sleep(0.016)
+
+# S1 SOLARIS // PHOTON RAKE
+func _s1_legendary_sunfire_grid(base_direction: Vector2) -> void:
+	for i in range(9):
+		var offset := (float(i) - 4.0) * 9.0
+		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, offset)
+		var start := (origin + lateral).round()
+		var end := (start + IsoVfx.ground_vector(base_direction, 252.0)).round()
+		await _s1_project_photon_cut(start, end, 3, i % 2 == 0)
+	await _sleep(0.02)
+
+func _s1_legendary_solar_cross(base_direction: Vector2) -> void:
+	for i in range(8):
+		var aim := base_direction.rotated(TAU * float(i) / 8.0)
+		var end := (origin + IsoVfx.ground_vector(aim, 224.0)).round()
+		await _s1_project_photon_cut(origin, end, 3, true)
+	_pulse_ring(owner_ground, 112.0, Color(3.5, 2.2, 0.75, 1.0), Color(1.8, 0.55, 0.08, 0.25), 0.18, 40)
+	_radial_hit(owner_ground, 114.0, true)
+
+func _s1_legendary_corona_breaker(base_direction: Vector2) -> void:
+	for i in range(5):
+		var offset := (float(i) - 2.0) * 10.0
+		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, offset)
+		var start := (origin + lateral).round()
+		var end := (start + IsoVfx.ground_vector(base_direction, 244.0)).round()
+		await _s1_project_photon_cut(start, end, 3, true)
+	var center := (origin + IsoVfx.ground_vector(base_direction, 235.0)).round()
+	_pulse_ring(center, 92.0, Color(3.7, 2.4, 0.78, 1.0), Color(1.9, 0.6, 0.08, 0.28), 0.20, 44)
+	_radial_hit(center, 94.0, true)
+	_explode(center, Color(3.8, 2.0, 0.56, 1.0), Color(1.9, 0.48, 0.07, 1.0), 38.0, 42.0)
+	for i in range(12):
+		var end := IsoVfx.ground_point(center, TAU * float(i) / 12.0, 90.0).round()
+		var flare := _line(center, end, Color(3.6, 1.75, 0.5, 0.9), Color(1.8, 0.45, 0.07, 0.18))
+		_damage_line(center, end, 5.0)
+		_fade_free(flare, 0.14)
+
+# S2 PHANTOM // GRAVITY WELL
+func _s2_legendary_black_star(base_direction: Vector2) -> void:
+	var dest := _target_clamped(255.0)
+	await _s2_gravity_collapse(dest, 122.0, 3, true)
+	await _sleep(0.035)
+	await _s2_gravity_collapse(dest, 94.0, 3, true)
+	_explode(dest, Color(2.0, 3.25, 3.75, 1.0), Color(0.3, 0.9, 1.9, 1.0), 42.0, 48.0)
+	_pulse_ring(dest, 132.0, Color(1.9, 3.2, 3.75, 1.0), Color(0.28, 0.85, 1.9, 0.28), 0.22, 48)
+	_radial_hit(dest, 132.0, true)
+
+func _s2_legendary_orbital_prison(base_direction: Vector2) -> void:
+	var max_range := 265.0
+	var locked := _nearest_enemy_to_aim(target, 105.0, max_range)
+	var tracking_id := 0
+	var fallback := _target_clamped(max_range)
+	if locked != null and is_instance_valid(locked):
+		tracking_id = locked.get_instance_id()
+		fallback = locked.global_position.round()
+	for cycle in range(3):
+		var center := _r3_resolve_target_position(tracking_id, fallback)
+		_show_target_lock(center, Color(1.65, 3.0, 3.6, 1.0), Color(0.24, 0.8, 1.8, 0.8))
+		await _s2_gravity_collapse(center, 82.0 + float(cycle) * 9.0, 3, cycle > 0)
+		fallback = center
+		await _sleep(0.03)
+	var final_center := _r3_resolve_target_position(tracking_id, fallback)
+	_explode(final_center, Color(1.9, 3.2, 3.7, 1.0), Color(0.28, 0.85, 1.85, 1.0), 32.0, 36.0)
+
+func _s2_legendary_event_horizon(base_direction: Vector2) -> void:
+	var entry := _target_clamped(240.0)
+	var exit := (entry + IsoVfx.ground_vector(base_direction, 118.0)).round()
+	await _s2_gravity_collapse(entry, 80.0, 3, true)
+	await _s2_gravity_collapse(exit, 80.0, 3, true)
+	var rift := _line(entry, exit, Color(1.85, 3.2, 3.75, 1.0), Color(0.28, 0.85, 1.9, 0.32))
+	_damage_line(entry, exit, 9.0)
+	_fade_free(rift, 0.28)
+	_explode(entry, Color(1.75, 3.05, 3.6, 1.0), Color(0.25, 0.8, 1.8, 1.0), 27.0, 30.0)
+	_explode(exit, Color(2.0, 3.3, 3.8, 1.0), Color(0.3, 0.9, 1.95, 1.0), 34.0, 38.0)
+	_pulse_ring(exit, 94.0, Color(1.9, 3.2, 3.75, 1.0), Color(0.28, 0.85, 1.9, 0.24), 0.18, 38)
+	_radial_hit(exit, 96.0, true)
+
+# S3 SPIDER // PHASE NEEDLES
+func _s3_legendary_phase_fusillade(base_direction: Vector2) -> void:
+	var saved_direction := direction
+	for fan_angle in [-0.24, 0.0, 0.24]:
+		direction = base_direction.rotated(float(fan_angle)).normalized()
+		var ends: Array[Vector2] = []
+		for i in range(9):
+			var f := float(i) / 8.0 - 0.5
+			ends.append((origin + IsoVfx.ground_vector(direction, 222.0, f * deg_to_rad(54.0))).round())
+		await _s3_phase_needle_volley(ends, 3, fan_angle != 0.0)
+		await _sleep(0.018)
+	direction = saved_direction
+
+func _s3_legendary_web_crown(base_direction: Vector2) -> void:
+	var ends: Array[Vector2] = []
+	for i in range(16):
+		var aim := base_direction.rotated(TAU * float(i) / 16.0)
+		ends.append((origin + IsoVfx.ground_vector(aim, 196.0)).round())
+	await _s3_phase_needle_volley(ends, 3, true)
+	_pulse_ring(owner_ground, 112.0, Color(2.3, 3.0, 3.7, 1.0), Color(0.6, 0.9, 1.95, 0.24), 0.18, 40)
+	_radial_hit(owner_ground, 114.0, true)
+
+func _s3_legendary_ghost_swarm(base_direction: Vector2) -> void:
+	var saved_direction := direction
+	for wave in range(4):
+		direction = base_direction.rotated(sin(float(wave) * 1.8) * 0.12).normalized()
+		var ends: Array[Vector2] = []
+		var count := 7
+		for i in range(count):
+			var f := float(i) / float(count - 1) - 0.5
+			var reach := 190.0 + float(wave) * 18.0
+			ends.append((origin + IsoVfx.ground_vector(direction, reach, f * deg_to_rad(44.0 + float(wave) * 5.0))).round())
+		await _s3_phase_needle_volley(ends, 3, true)
+		await _sleep(0.028)
+	direction = saved_direction
+
 func _m1_legendary_omega_edge(base_direction: Vector2) -> void:
 	# Three over-range cleavers tear through a broad forward fan. This is the
 	# cleanest "more blade" mutation and keeps ATLAS readable in dense swarms.
@@ -1188,6 +1544,17 @@ func _m2_project_vector_harpoons(
 
 func _m2_vector_harpoons() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"predator_grid":
+			await _m2_legendary_predator_grid(base_direction)
+			return
+		"apex_reel":
+			await _m2_legendary_apex_reel(base_direction)
+			return
+		"kill_lattice":
+			await _m2_legendary_kill_lattice(base_direction)
+			return
 
 	# Preserve Panther's existing upgrade structure:
 	# T0 = 3, T1 = 5, T2 = 7, T3 = 9 projected harpoons.
@@ -1372,6 +1739,17 @@ func _m2_anchor_bloom() -> void:
 # M3 PRIMARY: COMET MORTAR
 func _m3_comet_mortar() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"meteor_shower":
+			await _m3_legendary_meteor_shower(base_direction)
+			return
+		"cluster_sun":
+			await _m3_legendary_cluster_sun(base_direction)
+			return
+		"comet_corridor":
+			await _m3_legendary_comet_corridor(base_direction)
+			return
 	var max_range := 245.0 + float(tier) * 12.0
 
 	var locked_target := _nearest_enemy_to_aim(
@@ -1645,6 +2023,17 @@ func _radial_explosion_field(
 # opens slightly as tiers are added.
 func _r1_prism_lance() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"prism_wall":
+			await _r1_legendary_prism_wall(base_direction)
+			return
+		"kaleidoscope":
+			await _r1_legendary_kaleidoscope(base_direction)
+			return
+		"refraction_engine":
+			await _r1_legendary_refraction_engine(base_direction)
+			return
 	var lance_count := 3 + tier
 	var reach := 184.0 + float(tier) * 14.0
 	var fan_width := deg_to_rad(8.0 + float(tier) * 2.0)
@@ -1862,6 +2251,17 @@ func _r1_halo_sweep() -> void:
 # tears a forward fracture cone through the crowd after impact.
 func _r2_breach_cannon() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"rail_annihilator":
+			await _r2_legendary_rail_annihilator(base_direction)
+			return
+		"breach_trident":
+			await _r2_legendary_breach_trident(base_direction)
+			return
+		"fault_engine":
+			await _r2_legendary_fault_engine(base_direction)
+			return
 	var max_range := 250.0 + float(tier) * 18.0
 	var end := _target_clamped(max_range)
 
@@ -2435,6 +2835,17 @@ func _r3_run_dive_salvo(
 
 func _r3_swarm_rack() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"cerberus_protocol":
+			await _r3_legendary_cerberus_protocol(base_direction)
+			return
+		"orbital_pack":
+			await _r3_legendary_orbital_pack(base_direction)
+			return
+		"recursive_warhead":
+			await _r3_legendary_recursive_warhead(base_direction)
+			return
 
 	# Preserve Hunter's upgrade structure:
 	# T0 = 3 missiles, T1 = 4, T2 = 5, T3 = 6 plus the longest lock range.
@@ -2638,6 +3049,17 @@ func _r3_flak_dome() -> void:
 # R4 PRIMARY: ARC CASCADE
 func _r4_arc_cascade() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"tesla_storm":
+			await _r4_legendary_tesla_storm(base_direction)
+			return
+		"arc_web":
+			await _r4_legendary_arc_web(base_direction)
+			return
+		"neural_overload":
+			await _r4_legendary_neural_overload(base_direction)
+			return
 	var hop_count := 3 + tier * 2
 	var chain := _chain_enemy_points(hop_count, 220.0 + float(tier) * 12.0, 112.0 + float(tier) * 8.0)
 	if chain.size() <= 1:
@@ -2765,6 +3187,17 @@ func _s1_project_photon_cut(
 
 func _s1_photon_rake() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"sunfire_grid":
+			await _s1_legendary_sunfire_grid(base_direction)
+			return
+		"solar_cross":
+			await _s1_legendary_solar_cross(base_direction)
+			return
+		"corona_breaker":
+			await _s1_legendary_corona_breaker(base_direction)
+			return
 	var beam_count := 3 + tier * 2
 	var reach := 206.0 + float(tier) * 14.0
 	var spacing := 6.0
@@ -3103,6 +3536,17 @@ func _s2_gravity_collapse(
 # PHANTOM fires a gravity seed, then the battlefield visibly caves inward around it.
 func _s2_gravity_well() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"black_star":
+			await _s2_legendary_black_star(base_direction)
+			return
+		"orbital_prison":
+			await _s2_legendary_orbital_prison(base_direction)
+			return
+		"event_horizon":
+			await _s2_legendary_event_horizon(base_direction)
+			return
 	var max_range := 205.0 + float(tier) * 16.0
 
 	var locked_target := _nearest_enemy_to_aim(
@@ -3465,6 +3909,17 @@ func _s3_phase_needle_volley(
 # SPIDER now fires a synchronized fan that repeatedly disappears and reappears downrange.
 func _s3_phase_needles() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"phase_fusillade":
+			await _s3_legendary_phase_fusillade(base_direction)
+			return
+		"web_crown":
+			await _s3_legendary_web_crown(base_direction)
+			return
+		"ghost_swarm":
+			await _s3_legendary_ghost_swarm(base_direction)
+			return
 	var shard_count := 5 + tier * 2
 	var reach := 176.0 + float(tier) * 12.0
 	var spread := deg_to_rad(48.0 + float(tier) * 6.0)
