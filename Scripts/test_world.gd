@@ -301,12 +301,6 @@ func _on_active_mecha_changed(mecha: MechaController) -> void:
 	_update_hud()
 
 func _on_omega_primary_mode_changed(enabled: bool, display_name: String) -> void:
-	var active := mecha_manager.get_active_mecha()
-	if enabled:
-		_show_banner("LMB OMEGA   %s" % display_name, 0.72)
-	else:
-		var standard_name := "PRIMARY" if active == null else active.get_primary_ability_name()
-		_show_banner("LMB STANDARD   %s" % standard_name, 0.72)
 	SFX.play_ui(self, "level", -13.5, 1.08 if enabled else 0.92)
 	_update_hud()
 
@@ -1498,17 +1492,16 @@ func _record_and_get_best_time(value: float) -> float:
 		config.save(path)
 	return best
 
-func _show_banner(message: String, hold_time: float = 0.8) -> void:
+func _show_banner(_message: String, _hold_time: float = 0.8) -> void:
+	# Transient gameplay banners are intentionally disabled. The compact HUD and
+	# dedicated interactive panels now carry all progression/state information,
+	# keeping combat and OMEGA cycling visually uninterrupted.
 	if _banner_tween != null and _banner_tween.is_valid():
 		_banner_tween.kill()
-	deck_banner_text.text = message
-	deck_banner.show()
-	deck_banner.modulate.a = 1.0
-	_banner_tween = create_tween()
-	_banner_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
-	_banner_tween.tween_interval(hold_time)
-	_banner_tween.tween_property(deck_banner, "modulate:a", 0.0, 0.28)
-	_banner_tween.tween_callback(deck_banner.hide)
+	_banner_tween = null
+	if deck_banner != null:
+		deck_banner.modulate.a = 0.0
+		deck_banner.hide()
 
 func _build_upgrade_overlay() -> void:
 	_upgrade_overlay = CenterContainer.new()

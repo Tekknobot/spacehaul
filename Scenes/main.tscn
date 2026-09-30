@@ -58,7 +58,6 @@ corner_radius_bottom_left = 4
 
 [node name="CharacterTestDeck" type="Node2D" unique_id=960116902]
 script = ExtResource("1_world")
-video_capture_mode = true
 
 [node name="ProceduralDeck" type="Node2D" parent="." unique_id=1973192649]
 script = ExtResource("2_deck")
@@ -70,6 +69,7 @@ script = ExtResource("2_deck")
 [node name="MechaManager" type="Node2D" parent="." unique_id=308486086]
 script = ExtResource("3_manager")
 randomize_each_run = false
+fixed_starting_mecha = "R1"
 
 [node name="EnemyManager" type="Node2D" parent="." unique_id=1764950342]
 script = ExtResource("7_enemy_manager")
