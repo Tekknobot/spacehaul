@@ -921,21 +921,23 @@ func _ability_impact_fx(
 	at: Vector2,
 	core: Color,
 	glow: Color,
-	radius: float
+	radius: float,
+	play_sound: bool = false
 ) -> void:
 	var fx := ExplosionScript.new() as SpacehaulSpecialExplosion
 	root.add_child(fx)
 
-	# This helper is deliberately visual-only. Do not trigger the global explosion
-	# sample for contact sparks/corona/web decoration; real damaging _explode()
-	# calls remain audible.
+	# Most generated impact sprites are decorative members of a larger barrage, so
+	# they stay silent by default. RMB abilities can opt one representative impact
+	# into audio for each meaningful detonation beat without stacking dozens of
+	# copies of the same explosion sample.
 	fx.setup(
 		at.round(),
 		core,
 		glow,
 		radius * impact_scale,
 		0.28,
-		false
+		play_sound
 	)
 
 	_spawn_impact_particles(
@@ -1663,14 +1665,17 @@ func _m2_anchor_release_wave(
 	# detonation reaching the floor rather than a decorative ring disappearing.
 	var impact_stride := maxi(1, int(round(float(shard_count) / 8.0)))
 
+	var played_release_sound := false
 	for i in range(endpoints.size()):
 		if i % impact_stride == 0:
 			_ability_impact_fx(
 				endpoints[i],
 				core,
 				glow,
-				7.0 + float(tier) + (2.0 if overcharged else 0.0)
+				7.0 + float(tier) + (2.0 if overcharged else 0.0),
+				not played_release_sound
 			)
+			played_release_sound = true
 
 		if i < shards.size() and is_instance_valid(shards[i]):
 			shards[i].queue_free()
@@ -1898,15 +1903,63 @@ func _m3_orbital_rain() -> void:
 	var tier := secondary_tier
 	var strikes := 8 + tier * 4
 	var radius := 72.0 + float(tier) * 10.0
+	var core := Color(3.0, 1.2, 0.3, 1.0)
+	var glow := Color(1.5, 0.3, 0.08, 1.0)
+
 	_explode(owner_ground, Color(2.8, 1.2, 0.3, 1.0), Color(1.4, 0.3, 0.08, 1.0), 13.0, 13.0)
+
+	# Early Orbital Rain still reads as a perimeter bombardment. Upgrades then
+	# progressively invade the interior; Tier III SATURATION deliberately fills
+	# the whole isometric ground disk instead of drawing one circumference.
+	if tier >= 1:
+		_pulse_ring(owner_ground, radius, core, Color(glow.r, glow.g, glow.b, 0.20), 0.18, 28, 0.0)
+	if tier >= 2:
+		_pulse_ring(owner_ground, radius * 0.58, core, Color(glow.r, glow.g, glow.b, 0.16), 0.16, 22, 0.21)
+	if tier >= 3:
+		_pulse_ring(owner_ground, radius * 0.30, core, Color(glow.r, glow.g, glow.b, 0.14), 0.15, 16, 0.42)
+		# Guarantee that anything inside the saturated field participates even if it
+		# happens to stand between individual impact sprites.
+		_radial_hit(owner_ground, radius, true)
+
 	for i in range(strikes):
-		var angle := TAU * float(i) / float(strikes) + float(tier) * 0.13
-		var hit := (IsoVfx.ground_point(owner_ground, angle, radius)).round()
+		var hit_offset := _m3_orbital_rain_offset(i, strikes, tier, radius)
+		var hit := (owner_ground + hit_offset).round()
 		var sky_start := hit + Vector2(float((i % 3) - 1) * 18.0, -140.0)
 		var beam := _line(sky_start, hit, Color(3.0, 1.35, 0.35, 1.0), Color(1.5, 0.35, 0.08, 0.24))
-		_explode(hit, Color(3.0, 1.2, 0.3, 1.0), Color(1.5, 0.3, 0.08, 1.0), 11.0 + float(tier), 12.0 + float(tier))
+		_explode(hit, core, glow, 11.0 + float(tier), 12.0 + float(tier))
 		_fade_free(beam, 0.11)
 		await _sleep(0.025)
+
+func _m3_orbital_rain_offset(index: int, strike_count: int, tier: int, radius: float) -> Vector2:
+	var safe_count := maxi(1, strike_count)
+
+	# Base ability preserves the original outer-ring identity.
+	if tier <= 0:
+		var base_angle := TAU * float(index) / float(safe_count)
+		return IsoVfx.ground_offset(base_angle, radius)
+
+	# Tier I starts occupying the interior with two staggered bands.
+	if tier == 1:
+		var inner_count := maxi(4, int(round(float(safe_count) * 0.36)))
+		if index < inner_count:
+			var inner_angle := TAU * float(index) / float(inner_count) + 0.28
+			return IsoVfx.ground_offset(inner_angle, radius * 0.50)
+		var outer_index := index - inner_count
+		var outer_count := maxi(1, safe_count - inner_count)
+		var outer_angle := TAU * float(outer_index) / float(outer_count) - 0.12
+		return IsoVfx.ground_offset(outer_angle, radius * 0.94)
+
+	# Tier II/III use a sunflower distribution. sqrt(t) is important: using a
+	# linear radius would cluster impacts near the center instead of filling area.
+	if tier >= 3 and index == 0:
+		return Vector2.ZERO
+	var adjusted_index := index if tier < 3 else index - 1
+	var adjusted_count := safe_count if tier < 3 else maxi(1, safe_count - 1)
+	var t := (float(adjusted_index) + 0.55) / float(adjusted_count)
+	var strike_radius := radius * sqrt(clampf(t, 0.0, 1.0))
+	var golden_angle := PI * (3.0 - sqrt(5.0))
+	var angle := float(adjusted_index) * golden_angle + float(tier) * 0.19
+	return IsoVfx.ground_offset(angle, strike_radius)
 
 # R1 / R2 SHARED: ANNULAR IMPACT FIELD
 # Applies one crowd-control/damage hit to enemies in a donut around the player.
@@ -1975,7 +2028,8 @@ func _radial_explosion_field(
 	core: Color,
 	glow: Color,
 	phase: float = 0.0,
-	explosion_size: float = 8.0
+	explosion_size: float = 8.0,
+	sound_per_ring: bool = false
 ) -> void:
 	var safe_rings := maxi(1, ring_count)
 
@@ -2007,7 +2061,8 @@ func _radial_explosion_field(
 				blast_point,
 				core,
 				glow,
-				explosion_size + ring_t * 2.0
+				explosion_size + ring_t * 2.0,
+				sound_per_ring and i == 0
 			)
 			
 			await _sleep(0.018)
@@ -2231,7 +2286,8 @@ func _r1_halo_sweep() -> void:
 			Color(1.25, 3.0, 3.35, 1.0),
 			glow,
 			phase,
-			7.0 + float(tier) * 0.6
+			7.0 + float(tier) * 0.6,
+			true
 		)
 
 		# One controlled annular hit gives the explosion carpet real gameplay
@@ -2550,6 +2606,7 @@ func _r2_countershock() -> void:
 		await _sleep(0.035)
 
 		var outer_points := 12
+		var played_finisher_sound := false
 		for i in range(outer_points):
 			var angle := (
 				TAU * float(i) / float(outer_points)
@@ -2565,8 +2622,10 @@ func _r2_countershock() -> void:
 				edge,
 				Color(3.25, 1.9, 0.58, 1.0),
 				Color(1.65, 0.42, 0.08, 1.0),
-				9.5
+				9.5,
+				not played_finisher_sound
 			)
+			played_finisher_sound = true
 
 	await _sleep(0.05)
 
@@ -3028,6 +3087,7 @@ func _r3_flak_dome() -> void:
 		)
 
 		var finish_count := 8
+		var played_finish_sound := false
 		for i in range(finish_count):
 			var angle := TAU * float(i) / float(finish_count) + 0.22
 			var edge := IsoVfx.ground_point(
@@ -3040,8 +3100,10 @@ func _r3_flak_dome() -> void:
 				edge,
 				Color(1.8, 3.0, 3.35, 1.0),
 				Color(0.2, 0.85, 1.55, 1.0),
-				8.0
+				8.0,
+				not played_finish_sound
 			)
+			played_finish_sound = true
 
 			await _sleep(0.014)
 
@@ -3290,6 +3352,7 @@ func _s1_solar_corona_wave(
 
 	var steps := 12
 	var emitted := 0
+	var played_corona_sound := false
 	var safe_count := maxi(1, eruption_count)
 	var golden_angle := 2.399963229728653
 	var phase := 0.31 if overcharged else 0.0
@@ -3340,12 +3403,20 @@ func _s1_solar_corona_wave(
 				blast_radius
 			).round()
 
+			var play_corona_impact := (
+				not played_corona_sound
+				and step >= 4
+			)
+
 			_ability_impact_fx(
 				blast_point,
 				core,
 				glow,
-				7.0 + float(tier) * 0.8 + (1.5 if overcharged else 0.0)
+				7.0 + float(tier) * 0.8 + (1.5 if overcharged else 0.0),
+				play_corona_impact
 			)
+			if play_corona_impact:
+				played_corona_sound = true
 
 			if emitted % 3 == 0:
 				_spark_pixels(
@@ -3717,6 +3788,7 @@ func _s2_mass_ejection_wave(
 	_radial_hit(owner_ground, max_radius, true)
 
 	var impact_stride := maxi(1, int(round(float(shard_count) / 9.0)))
+	var played_ejection_sound := false
 
 	for i in range(endpoints.size()):
 		if i % impact_stride == 0:
@@ -3724,8 +3796,10 @@ func _s2_mass_ejection_wave(
 				endpoints[i],
 				core,
 				glow,
-				7.0 + float(tier) * 0.8 + (2.0 if overcharged else 0.0)
+				7.0 + float(tier) * 0.8 + (2.0 if overcharged else 0.0),
+				not played_ejection_sound
 			)
+			played_ejection_sound = true
 
 		if i < shards.size() and is_instance_valid(shards[i]):
 			shards[i].queue_free()

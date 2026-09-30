@@ -13,6 +13,12 @@ const SECONDARY_UNLOCK_TIME := 60.0
 @export_category("Video Capture")
 @export var video_capture_mode := false
 @export_range(1.0, 19.0, 0.5) var video_capture_start_minutes := 15.0
+# Late-run showcase captures should include the build-defining Omega state that a
+# normal player would almost certainly have hunted by this point. Disable this
+# when recording the Tier III signature attack before its Legendary mutation.
+@export var video_capture_include_omega := true
+@export_range(0, 2, 1) var video_capture_omega_choice := 0
+@export_range(5.0, 15.0, 0.5) var video_capture_omega_minute := 8.0
 
 @onready var deck: ProceduralDeck = $ProceduralDeck
 @onready var mecha_manager: MechaManager = $MechaManager
@@ -255,9 +261,21 @@ func _on_active_mecha_changed(mecha: MechaController) -> void:
 		mecha.hull_changed.connect(_on_hull_changed)
 	if not mecha.destroyed.is_connected(_on_player_destroyed):
 		mecha.destroyed.connect(_on_player_destroyed)
+	if not mecha.omega_primary_mode_changed.is_connected(_on_omega_primary_mode_changed):
+		mecha.omega_primary_mode_changed.connect(_on_omega_primary_mode_changed)
 	mecha.set_secondary_unlocked(_secondary_announced)
 	_last_hull = mecha.get_hull()
 	_low_hull_warned = false
+	_update_hud()
+
+func _on_omega_primary_mode_changed(enabled: bool, display_name: String) -> void:
+	var active := mecha_manager.get_active_mecha()
+	if enabled:
+		_show_banner("LMB OMEGA   %s" % display_name, 0.72)
+	else:
+		var standard_name := "PRIMARY" if active == null else active.get_primary_ability_name()
+		_show_banner("LMB STANDARD   %s" % standard_name, 0.72)
+	SFX.play_ui(self, "level", -13.5, 1.08 if enabled else 0.92)
 	_update_hud()
 
 func _on_hull_changed(current_hull: int, max_hull: int) -> void:
@@ -533,8 +551,11 @@ func _start_selected_run() -> void:
 	_update_hud()
 
 func _apply_video_capture_state() -> void:
-	# Stage a believable late-run state for recording. The clock, deck, enemy
-	# pressure, secondary weapon and upgrade budget all advance together.
+	# Stage a believable run state for recording. The clock, deck, enemy pressure,
+	# secondary unlock and EVERY level-up choice accumulated by the requested time
+	# advance together. Ability evolution is deliberately protected from generic
+	# stat choices so capture mode cannot accidentally show an under-developed
+	# chassis at a late timestamp.
 	get_tree().paused = false
 	_game_over = false
 	_run_complete = false
@@ -551,9 +572,9 @@ func _apply_video_capture_state() -> void:
 	)
 	_next_deck_time = minf(RUN_DURATION, float(_deck_number) * DECK_DURATION)
 
-	# Approximate the amount of progression a healthy run would have accumulated
-	# by this point. At the default 15:00 start this produces level 14, enough
-	# budget for both ability trees plus several useful chassis upgrades.
+	# Approximate a healthy run's number of salvage level-ups. The important part
+	# is that level - 1 is treated as an exact choice budget below: every simulated
+	# choice is spent on either a chassis ability or a real generic upgrade.
 	_level = clampi(2 + int(floor(video_capture_start_minutes * 0.8)), 2, 18)
 	_salvage_required = 5 + _level * 4
 	_salvage = int(floor(float(_salvage_required) * 0.35))
@@ -567,7 +588,8 @@ func _apply_video_capture_state() -> void:
 	var active := mecha_manager.get_active_mecha()
 	if active != null:
 		active.set_secondary_unlocked(_secondary_announced)
-		_apply_video_capture_upgrades(active, maxi(0, _level - 1))
+		_apply_video_capture_upgrades(active, maxi(0, _level - 1), video_capture_start_minutes)
+		_apply_video_capture_omega(active, video_capture_start_minutes)
 		active.repair_hull(active.get_max_hull())
 
 	# generate_new_level() intentionally displays the deck banner during normal
@@ -579,45 +601,102 @@ func _apply_video_capture_state() -> void:
 	enemy_manager.prepare_video_capture_state(_run_time)
 	_update_hud()
 
-func _apply_video_capture_upgrades(active: MechaController, upgrade_budget: int) -> void:
-	var budget := upgrade_budget
+func _apply_video_capture_upgrades(active: MechaController, upgrade_budget: int, capture_minutes: float) -> void:
+	var budget := maxi(0, upgrade_budget)
 
-	# Chassis-specific ability evolution gets priority, alternating LMB and RMB.
-	while budget > 0 and (active.can_upgrade_primary_ability() or active.can_upgrade_secondary_ability()):
-		if active.can_upgrade_primary_ability() and budget > 0:
-			active.upgrade_primary_ability()
-			budget -= 1
-		if active.can_upgrade_secondary_ability() and budget > 0:
-			active.upgrade_secondary_ability()
-			budget -= 1
+	# Simulate a primary-biased real build instead of perfectly alternating LMB
+	# and RMB. Primary is available from the opening seconds, whereas secondary is
+	# not online until 01:00. By a normal late showcase (7+ minutes) both ability
+	# trees are guaranteed Tier III before generic stat picks consume the rest of
+	# the accumulated level-up budget.
+	var primary_target := 0
+	if capture_minutes >= 1.0:
+		primary_target = 1
+	if capture_minutes >= 2.0:
+		primary_target = 2
+	if capture_minutes >= 4.0:
+		primary_target = 3
 
-	# Spend the remaining simulated level-up choices on a deterministic,
-	# recording-friendly build. This avoids opening upgrade menus on startup.
+	var secondary_target := 0
+	if _secondary_announced:
+		if capture_minutes >= 3.0:
+			secondary_target = 1
+		if capture_minutes >= 5.0:
+			secondary_target = 2
+		if capture_minutes >= 7.0:
+			secondary_target = 3
+
+	# Ability choices always win over generic upgrades. Primary receives first
+	# claim on the budget, which creates the intended early LMB > RMB progression.
+	while budget > 0 and active.get_primary_ability_tier() < primary_target and active.can_upgrade_primary_ability():
+		active.upgrade_primary_ability()
+		budget -= 1
+
+	while budget > 0 and active.get_secondary_ability_tier() < secondary_target and active.can_upgrade_secondary_ability():
+		active.upgrade_secondary_ability()
+		budget -= 1
+
+	# Once the time-appropriate ability tiers are present, spend every remaining
+	# historical choice on a deterministic chassis-flavoured build. This keeps
+	# capture starts reproducible while avoiding the old identical generic build
+	# across all ten mechas.
+	var generic_plan: Array = _get_video_capture_generic_plan(active.mecha_id)
 	var generic_step := 0
-	while budget > 0:
-		match generic_step % 10:
-			0:
-				active.apply_primary_cooling(0.85)
-			1:
-				active.apply_secondary_cooling(0.85)
-			2:
-				active.add_max_hull(20, 20)
-			3:
-				active.apply_impact_multiplier(1.18)
-			4:
-				active.apply_move_speed_multiplier(1.08)
-			5:
-				active.add_max_hull(20, 20)
-			6:
-				_salvage_magnet_radius = minf(220.0, _salvage_magnet_radius * 1.20)
-			7:
-				active.apply_primary_cooling(0.85)
-			8:
-				active.apply_secondary_cooling(0.85)
-			9:
-				active.apply_impact_multiplier(1.18)
+	while budget > 0 and not generic_plan.is_empty():
+		var choice_id := String(generic_plan[generic_step % generic_plan.size()])
+		_apply_video_capture_generic_upgrade(active, choice_id)
 		generic_step += 1
 		budget -= 1
+
+func _get_video_capture_generic_plan(mecha_id: String) -> Array:
+	# These are not extra upgrades: they are the simulated choices left over after
+	# ability evolution. Different chassis lean into different plausible priorities
+	# so a capture of every mecha does not produce the exact same stat build.
+	match mecha_id:
+		"M1": return ["primary_cooling", "impact", "hull", "servo", "secondary_cooling", "magnet", "impact", "primary_cooling", "hull", "secondary_cooling"]
+		"M2": return ["servo", "primary_cooling", "impact", "hull", "magnet", "secondary_cooling", "servo", "impact", "hull", "primary_cooling"]
+		"M3": return ["impact", "primary_cooling", "secondary_cooling", "hull", "magnet", "impact", "servo", "primary_cooling", "hull", "secondary_cooling"]
+		"R1": return ["primary_cooling", "impact", "secondary_cooling", "servo", "hull", "magnet", "primary_cooling", "impact", "secondary_cooling", "hull"]
+		"R2": return ["impact", "hull", "primary_cooling", "secondary_cooling", "servo", "impact", "magnet", "hull", "primary_cooling", "secondary_cooling"]
+		"R3": return ["primary_cooling", "secondary_cooling", "impact", "magnet", "servo", "hull", "primary_cooling", "impact", "secondary_cooling", "magnet"]
+		"R4": return ["primary_cooling", "impact", "secondary_cooling", "magnet", "hull", "servo", "impact", "primary_cooling", "secondary_cooling", "hull"]
+		"S1": return ["impact", "primary_cooling", "secondary_cooling", "servo", "magnet", "hull", "impact", "primary_cooling", "secondary_cooling", "servo"]
+		"S2": return ["impact", "hull", "secondary_cooling", "primary_cooling", "magnet", "servo", "impact", "hull", "primary_cooling", "secondary_cooling"]
+		"S3": return ["primary_cooling", "servo", "impact", "secondary_cooling", "magnet", "hull", "primary_cooling", "servo", "impact", "secondary_cooling"]
+		_: return ["primary_cooling", "impact", "hull", "servo", "secondary_cooling", "magnet"]
+
+func _apply_video_capture_generic_upgrade(active: MechaController, choice_id: String) -> void:
+	match choice_id:
+		"primary_cooling":
+			active.apply_primary_cooling(0.85)
+		"secondary_cooling":
+			if active.is_secondary_unlocked():
+				active.apply_secondary_cooling(0.85)
+			else:
+				active.apply_primary_cooling(0.85)
+		"impact":
+			active.apply_impact_multiplier(1.18)
+		"hull":
+			active.add_max_hull(20, 20)
+		"servo":
+			active.apply_move_speed_multiplier(1.08)
+		"magnet":
+			_salvage_magnet_radius = minf(220.0, _salvage_magnet_radius * 1.20)
+
+func _apply_video_capture_omega(active: MechaController, capture_minutes: float) -> void:
+	if not video_capture_include_omega:
+		return
+	if capture_minutes < video_capture_omega_minute:
+		return
+	if not active.can_accept_omega_mutation():
+		return
+	var choices: Array = active.get_omega_mutation_choices()
+	if choices.is_empty():
+		return
+	var choice_index := clampi(video_capture_omega_choice, 0, choices.size() - 1)
+	var mutation_id := String(choices[choice_index].get("id", ""))
+	if not mutation_id.is_empty():
+		active.set_legendary_mutation(mutation_id)
 
 func _on_deck_regenerated(_new_spawn: Vector2, new_seed: int) -> void:
 	mecha_manager.relocate_after_deck_regeneration()
@@ -780,7 +859,10 @@ func _update_hud() -> void:
 		_salvage_required
 	]
 	if active.has_legendary_mutation():
-		_hud_omega.text = "OMEGA %s" % active.get_legendary_mutation_hud_name()
+		if active.is_omega_primary_selected():
+			_hud_omega.text = "OMEGA %s" % active.get_legendary_mutation_hud_name()
+		else:
+			_hud_omega.text = "OMEGA NORM"
 	elif _omega_core_stored:
 		_hud_omega.text = "OMEGA HELD"
 	elif active.get_primary_ability_tier() >= 3 and active.has_omega_mutations():
@@ -1345,7 +1427,7 @@ func _choose_omega_mutation(index: int) -> void:
 	_omega_overlay.hide()
 	get_tree().paused = false
 	SFX.play_ui(self, "secondary", -4.0, 0.72)
-	_show_banner("LEGENDARY ONLINE   %s" % active.get_legendary_mutation_display_name(), 1.18)
+	_show_banner("LEGENDARY ONLINE   %s\nMOUSE WHEEL   SWITCH LMB / OMEGA" % active.get_legendary_mutation_display_name(), 1.35)
 	_update_hud()
 	call_deferred("_check_level_up")
 

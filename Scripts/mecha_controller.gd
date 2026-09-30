@@ -3,6 +3,7 @@ class_name MechaController
 
 signal hull_changed(current_hull: int, max_hull: int)
 signal destroyed(mecha)
+signal omega_primary_mode_changed(enabled: bool, display_name: String)
 
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
 const SpecialAbilityScript = preload("res://Scripts/special_ability_effect.gd")
@@ -145,6 +146,7 @@ var secondary_unlocked := false
 var primary_ability_tier := 0
 var secondary_ability_tier := 0
 var legendary_mutation := ""
+var omega_primary_selected := false
 
 var _rng := RandomNumberGenerator.new()
 var _attack_fire_frame := 0
@@ -400,8 +402,26 @@ func set_legendary_mutation(mutation_id: String) -> bool:
 	for choice in choices:
 		if String(choice.get("id", "")) == mutation_id:
 			legendary_mutation = mutation_id
+			# Newly acquired Legendaries start active so the player immediately
+			# experiences the mutation. Mouse wheel can then return to standard LMB.
+			omega_primary_selected = true
 			return true
 	return false
+
+func is_omega_primary_selected() -> bool:
+	return has_legendary_mutation() and omega_primary_selected
+
+func get_primary_attack_mutation() -> String:
+	if is_omega_primary_selected():
+		return legendary_mutation
+	return ""
+
+func toggle_omega_primary_mode() -> bool:
+	if not has_legendary_mutation():
+		return false
+	omega_primary_selected = not omega_primary_selected
+	omega_primary_mode_changed.emit(omega_primary_selected, get_legendary_mutation_display_name())
+	return true
 
 func can_upgrade_primary_ability() -> bool:
 	return primary_ability_tier < MAX_ABILITY_TIER
@@ -504,6 +524,11 @@ func _update_attack_state(delta: float) -> void:
 func _process_player(delta: float) -> void:
 	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attack_direction := _get_attack_direction()
+
+	# Legendary mutations no longer delete the weapon the player built all run.
+	# Either mouse-wheel direction toggles LMB between Tier III standard and Omega.
+	if Input.is_action_just_pressed("toggle_omega_primary"):
+		toggle_omega_primary_mode()
 
 	if Input.is_action_just_pressed("dash") and _boost_cooldown_left <= 0.0:
 		_start_boost(move_input, attack_direction)
@@ -692,7 +717,10 @@ func _spawn_special_ability(direction: Vector2) -> void:
 	var effect := SpecialAbilityScript.new() as SpacehaulSpecialAbility
 	root.add_child(effect)
 	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
-	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), global_position, _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier, legendary_mutation)
+	# RMB is never replaced by the primary Omega mutation. LMB receives the
+	# mutation only while the player has explicitly selected Omega mode.
+	var active_primary_mutation := "" if _attack_alternate else get_primary_attack_mutation()
+	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), global_position, _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier, active_primary_mutation)
 
 func _get_attack_target(attack_dir: Vector2) -> Vector2:
 	var joy_id := _first_connected_joypad()
