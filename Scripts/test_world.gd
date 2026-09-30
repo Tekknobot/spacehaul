@@ -373,7 +373,7 @@ func _build_mecha_select_overlay() -> void:
 	root_box.add_child(title)
 
 	var subtitle := Label.new()
-	subtitle.text = "CHASSIS SHOWROOM   //   LIVE SYSTEM PREVIEW"
+	subtitle.text = "CHASSIS SHOWROOM   LIVE SYSTEM PREVIEW"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
 	subtitle.add_theme_font_size_override("font_size", 11)
@@ -405,7 +405,7 @@ func _build_mecha_select_overlay() -> void:
 	_mecha_select_prev_label.add_theme_color_override("font_color", Color(0.27, 0.45, 0.51, 0.78))
 	left_stack.add_child(_mecha_select_prev_label)
 
-	var left_button := _make_showroom_arrow_button("<")
+	var left_button := _make_showroom_arrow_button("LEFT")
 	left_button.pressed.connect(_cycle_showroom_mecha.bind(-1))
 	left_stack.add_child(left_button)
 
@@ -466,7 +466,7 @@ func _build_mecha_select_overlay() -> void:
 	_mecha_select_next_label.add_theme_color_override("font_color", Color(0.27, 0.45, 0.51, 0.78))
 	right_stack.add_child(_mecha_select_next_label)
 
-	var right_button := _make_showroom_arrow_button(">")
+	var right_button := _make_showroom_arrow_button("RIGHT")
 	right_button.pressed.connect(_cycle_showroom_mecha.bind(1))
 	right_stack.add_child(right_button)
 
@@ -600,7 +600,7 @@ func _select_mecha(mecha_id: String) -> void:
 	_selected_mecha_id = mecha_id
 	var display_name := String(MechaController.MECHA_DISPLAY_NAMES.get(mecha_id, mecha_id))
 	var abilities: Dictionary = MechaController.ABILITY_NAMES.get(mecha_id, {})
-	_mecha_select_name.text = "%s   //   %s" % [mecha_id, display_name]
+	_mecha_select_name.text = "%s   %s" % [mecha_id, display_name]
 	_mecha_select_primary.text = "LMB\n%s" % String(abilities.get("primary", "PRIMARY"))
 	_mecha_select_secondary.text = "RMB\n%s" % String(abilities.get("secondary", "SECONDARY"))
 	if _mecha_select_deploy != null:
@@ -652,7 +652,7 @@ func _rebuild_showroom_mecha() -> void:
 	_showroom_demo_state = 0
 	_showroom_demo_timer = 0.85
 	if _showroom_demo_label != null:
-		_showroom_demo_label.text = "LIVE PREVIEW   //   IDLE"
+		_showroom_demo_label.text = "LIVE PREVIEW   IDLE"
 
 func _clear_showroom_fx() -> void:
 	if _showroom_fx_root == null:
@@ -696,7 +696,7 @@ func _trigger_showroom_ability(alternate: bool) -> void:
 	effect.root = _showroom_fx_root
 	if _showroom_demo_label != null:
 		var ability_name := _mecha_select_secondary.text.replace("RMB\n", "") if alternate else _mecha_select_primary.text.replace("LMB\n", "")
-		_showroom_demo_label.text = "%s   //   %s" % ["RMB" if alternate else "LMB", ability_name]
+		_showroom_demo_label.text = "%s   %s" % ["RMB" if alternate else "LMB", ability_name]
 
 func _update_mecha_showroom(delta: float) -> void:
 	if not _showroom_active or _showroom_mecha == null or not is_instance_valid(_showroom_mecha):
@@ -720,7 +720,7 @@ func _update_mecha_showroom(delta: float) -> void:
 			_showroom_demo_state = 2
 			_showroom_demo_timer = 0.72
 			if _showroom_demo_label != null:
-				_showroom_demo_label.text = "LIVE PREVIEW   //   IDLE"
+				_showroom_demo_label.text = "LIVE PREVIEW   IDLE"
 		2:
 			_trigger_showroom_ability(true)
 			_showroom_demo_state = 3
@@ -730,7 +730,7 @@ func _update_mecha_showroom(delta: float) -> void:
 			_showroom_demo_state = 0
 			_showroom_demo_timer = 1.05
 			if _showroom_demo_label != null:
-				_showroom_demo_label.text = "LIVE PREVIEW   //   IDLE"
+				_showroom_demo_label.text = "LIVE PREVIEW   IDLE"
 
 func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 	_menu_open = true
@@ -746,7 +746,7 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 		deck_banner.hide()
 	_set_standard_hud_visible(false)
 	if _mecha_select_status != null:
-		_mecha_select_status.text = "LEFT / RIGHT   CYCLE CHASSIS      ENTER / A   DEPLOY"
+		_mecha_select_status.text = "LEFT RIGHT   CYCLE CHASSIS      ENTER A   DEPLOY"
 	if _mecha_select_overlay != null:
 		_mecha_select_overlay.show()
 		_showroom_active = true
