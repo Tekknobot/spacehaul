@@ -1,6 +1,8 @@
 extends Node2D
 class_name SpacehaulEnemyManager
 
+signal broodmother_defeated
+
 const ENEMY_SCENE = preload("res://Scenes/enemy.tscn")
 const BROODMOTHER_SCENE = preload("res://Scenes/broodmother.tscn")
 const SFX = preload("res://Scripts/sound_fx.gd")
@@ -15,6 +17,7 @@ const RUN_DURATION := 20.0 * 60.0
 @export var opening_grace_seconds := 7.0
 @export var swarm_events_enabled := true
 @export var announce_major_swarms := true
+@export var expedition_boss_controlled := true
 @export_range(64, 128, 1) var hard_active_enemy_cap := 96
 
 @export_category("Omega Core")
@@ -69,7 +72,7 @@ func _process(delta: float) -> void:
 		return
 
 	var run_time := _get_run_time()
-	if not _broodmother_spawned and run_time >= BROODMOTHER_TRIGGER_TIME and _get_deck_number() >= 3:
+	if not expedition_boss_controlled and not _broodmother_spawned and run_time >= BROODMOTHER_TRIGGER_TIME and _get_deck_number() >= 3:
 		_cancel_swarm_event()
 		_spawn_broodmother()
 		return
@@ -124,7 +127,7 @@ func prepare_video_capture_state(run_time: float) -> void:
 	_cancel_swarm_event()
 	_deck_grace = 0.0
 	_spawn_timer = 0.0
-	_broodmother_spawned = run_time >= BROODMOTHER_TRIGGER_TIME
+	_broodmother_spawned = false if expedition_boss_controlled else run_time >= BROODMOTHER_TRIGGER_TIME
 	_next_swarm_time = run_time + 8.0
 	_next_omega_core_time = run_time + omega_core_interval
 
@@ -581,7 +584,13 @@ func _spawn_enemy_at(spawn_position: Vector2, enemy_type: String, run_time: floa
 	enemies.append(enemy)
 	return enemy
 
-func _spawn_broodmother() -> void:
+func spawn_broodmother_at(world_position: Vector2) -> void:
+	if _broodmother_spawned or is_boss_active():
+		return
+	_cancel_swarm_event()
+	_spawn_broodmother(world_position)
+
+func _spawn_broodmother(forced_position: Vector2 = Vector2.ZERO) -> void:
 	if deck == null:
 		return
 	var player := get_tree().get_first_node_in_group("player_mecha") as MechaController
@@ -593,7 +602,9 @@ func _spawn_broodmother() -> void:
 	# readable and subsequent adds come from eggs instead of the global spawner.
 	_trim_population_for_boss(10)
 
-	var spawn_position := deck.get_random_enemy_spawn_position(player.global_position, minimum_spawn_distance_cells + 2, _rng)
+	var spawn_position := forced_position
+	if spawn_position == Vector2.ZERO:
+		spawn_position = deck.get_random_enemy_spawn_position(player.global_position, minimum_spawn_distance_cells + 2, _rng)
 	if spawn_position == Vector2.ZERO:
 		spawn_position = deck.get_random_walkable_position_near(player.global_position, minimum_spawn_distance_cells + 2, _rng)
 
@@ -661,6 +672,7 @@ func _on_broodmother_defeated() -> void:
 	var managers := get_tree().get_nodes_in_group("survival_manager")
 	if not managers.is_empty() and managers[0].has_method("_show_banner"):
 		managers[0].call("_show_banner", "BROODMOTHER ELIMINATED", 1.25)
+	broodmother_defeated.emit()
 
 func is_boss_active() -> bool:
 	return _broodmother != null and is_instance_valid(_broodmother) and not _broodmother.is_queued_for_deletion()

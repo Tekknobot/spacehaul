@@ -139,6 +139,7 @@ var _wall_visual_root: Node2D
 var _path_grid := AStarGrid2D.new()
 var _deck_palette_index := 0
 var _deck_palette_material: ShaderMaterial
+var _expedition_special_rooms: Array[Dictionary] = []
 
 @onready var collision_root: Node2D = $CollisionRoot
 @onready var hazard_root: Node2D = $HazardRoot
@@ -174,6 +175,7 @@ func generate_new_level(requested_seed: int = -1) -> void:
 	_rng.seed = seed_value
 	_normalize_generation_values()
 	_build_room_and_hall_deck()
+	_assign_expedition_rooms()
 	_rebuild_path_grid()
 	_select_decorations()
 	_rebuild_floor_visuals()
@@ -602,6 +604,179 @@ func _rebuild_overlay_visuals() -> void:
 		cross.default_color = accent.lightened(0.18)
 		cross.antialiased = false
 		_overlay_visual_root.add_child(cross)
+
+	_rebuild_expedition_room_markers()
+
+
+# -----------------------------------------------------------------------------
+# Expedition room metadata / floor markers
+# -----------------------------------------------------------------------------
+
+func _assign_expedition_rooms() -> void:
+	_expedition_special_rooms.clear()
+	if _rooms.size() < 7:
+		return
+
+	var available: Array[int] = []
+	for i in range(1, _rooms.size()):
+		available.append(i)
+
+	# Put the HIVE as far from the deployment room as possible. Extraction is then
+	# chosen far from the hive, encouraging an actual escape traversal after the
+	# boss instead of ending the run in the boss chamber.
+	var hive_index := _farthest_room_index(_start_cell, available)
+	available.erase(hive_index)
+	var hive_cell := _rect_center(_rooms[hive_index])
+	var extraction_index := _farthest_room_index(hive_cell, available)
+	available.erase(extraction_index)
+
+	var chosen_objectives: Array[int] = []
+	var anchors: Array[Vector2i] = [_start_cell, hive_cell, _rect_center(_rooms[extraction_index])]
+	while chosen_objectives.size() < 4 and not available.is_empty():
+		var best_index := available[0]
+		var best_score := -1.0
+		for room_index in available:
+			var center := _rect_center(_rooms[room_index])
+			var nearest_anchor := INF
+			for anchor in anchors:
+				nearest_anchor = minf(nearest_anchor, Vector2(center).distance_to(Vector2(anchor)))
+			if nearest_anchor > best_score:
+				best_score = nearest_anchor
+				best_index = room_index
+		chosen_objectives.append(best_index)
+		anchors.append(_rect_center(_rooms[best_index]))
+		available.erase(best_index)
+
+	var objective_roles := ["ARMORY", "REPAIR BAY", "DATA CACHE", "REACTOR"]
+	for i in range(mini(objective_roles.size(), chosen_objectives.size())):
+		_add_expedition_room(String(objective_roles[i]), chosen_objectives[i])
+
+	_add_expedition_room("HIVE", hive_index)
+	_add_expedition_room("EXTRACTION", extraction_index)
+
+func _farthest_room_index(reference_cell: Vector2i, candidates: Array[int]) -> int:
+	if candidates.is_empty():
+		return -1
+	var best_index := candidates[0]
+	var best_distance := -1.0
+	for room_index in candidates:
+		var center := _rect_center(_rooms[room_index])
+		var distance := Vector2(center).distance_squared_to(Vector2(reference_cell))
+		if distance > best_distance:
+			best_distance = distance
+			best_index = room_index
+	return best_index
+
+func _add_expedition_room(role: String, room_index: int) -> void:
+	if room_index < 0 or room_index >= _rooms.size():
+		return
+	var room := _rooms[room_index]
+	var center_cell := _rect_center(room)
+	_expedition_special_rooms.append({
+		"role": role,
+		"room_index": room_index,
+		"room": room,
+		"center_cell": center_cell,
+		"center_world": _cell_center(center_cell),
+	})
+
+func _rebuild_expedition_room_markers() -> void:
+	if _overlay_visual_root == null:
+		return
+	for special in _expedition_special_rooms:
+		var role := String(special.get("role", ""))
+		var center_world: Vector2 = special.get("center_world", Vector2.ZERO)
+		var color := _expedition_role_color(role)
+
+		# Floor-projected diamonds stay beneath actors and read like diegetic deck
+		# signage rather than floating UI. The minimap supplies the text identity.
+		var marker := Node2D.new()
+		marker.name = "Expedition_%s" % role.replace(" ", "_")
+		marker.position = center_world.round()
+		marker.z_as_relative = false
+		marker.z_index = clampi(int(round(center_world.y)) - 3, -3000, 3000)
+		_overlay_visual_root.add_child(marker)
+
+		var outer := Line2D.new()
+		outer.points = _closed_polygon(_diamond_points(Vector2.ZERO, 29.0, 15.0))
+		outer.width = 2.0
+		outer.default_color = color
+		outer.antialiased = false
+		marker.add_child(outer)
+
+		var inner := Line2D.new()
+		inner.points = _closed_polygon(_diamond_points(Vector2.ZERO, 17.0, 9.0))
+		inner.width = 1.0
+		inner.default_color = Color(color.r, color.g, color.b, 0.58)
+		inner.antialiased = false
+		marker.add_child(inner)
+
+		var dot := Polygon2D.new()
+		dot.polygon = PackedVector2Array([Vector2(-2.0, 0.0), Vector2(0.0, -1.5), Vector2(2.0, 0.0), Vector2(0.0, 1.5)])
+		dot.color = color
+		marker.add_child(dot)
+
+		var label := Label.new()
+		label.position = Vector2(-42.0, -26.0)
+		label.size = Vector2(84.0, 14.0)
+		label.text = role
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+		label.add_theme_font_size_override("font_size", 9)
+		label.add_theme_color_override("font_color", color)
+		label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.88))
+		label.add_theme_constant_override("outline_size", 2)
+		marker.add_child(label)
+
+func _expedition_role_color(role: String) -> Color:
+	match role:
+		"ARMORY":
+			return Color(0.35, 0.92, 1.0, 0.90)
+		"REPAIR BAY":
+			return Color(0.40, 1.0, 0.58, 0.90)
+		"DATA CACHE":
+			return Color(0.80, 0.56, 1.0, 0.90)
+		"REACTOR":
+			return Color(1.0, 0.76, 0.30, 0.90)
+		"HIVE":
+			return Color(1.0, 0.30, 0.46, 0.90)
+		"EXTRACTION":
+			return Color(0.35, 0.72, 1.0, 0.90)
+		_:
+			return Color(0.75, 0.82, 0.86, 0.90)
+
+func get_room_rects() -> Array:
+	return _rooms.duplicate(true)
+
+func get_walkable_cells() -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for x in range(grid_width):
+		for y in range(grid_height):
+			if _walkable[x][y]:
+				cells.append(Vector2i(x, y))
+	return cells
+
+func get_expedition_special_rooms() -> Array:
+	return _expedition_special_rooms.duplicate(true)
+
+func get_room_index_at_world(world_position: Vector2) -> int:
+	var cell := world_to_cell(world_position)
+	for i in range(_rooms.size()):
+		if _rooms[i].has_point(cell):
+			return i
+	return -1
+
+func get_room_center_world(room_index: int) -> Vector2:
+	if room_index < 0 or room_index >= _rooms.size():
+		return Vector2.ZERO
+	return _cell_center(_rect_center(_rooms[room_index]))
+
+func get_expedition_room(role: String) -> Dictionary:
+	for special in _expedition_special_rooms:
+		if String(special.get("role", "")) == role:
+			return special.duplicate(true)
+	return {}
 
 func _on_hazard_body_entered(body: Node) -> void:
 	if body.has_method("take_hurt"):
