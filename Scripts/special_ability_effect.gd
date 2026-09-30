@@ -211,19 +211,355 @@ func _particle_profile() -> String:
 		"S3": return "phase"
 		_: return "ion"
 
+# -----------------------------------------------------------------------------
+# ISOMETRIC VFX DEPTH
+# -----------------------------------------------------------------------------
+# The mecha itself is sorted at ground Y + 2. Special abilities used to force
+# nearly every generated CanvasItem onto fixed 1700-1800 layers, which meant a
+# beam/ring/explosion could never pass behind the chassis. These helpers keep the
+# authored 2D art but sort each visual from its ground footprint instead.
+#
+# This same code is used by the chassis showroom because preview_mode only
+# disables combat queries/audio; owner_ground still represents the preview
+# mecha's feet in the isolated SubViewport.
+func _depth_y_for_point(point: Vector2) -> float:
+	# Weapon origins are authored around the upper body (roughly 18 px above the
+	# feet). Treat the exact muzzle/center as belonging to the chassis' ground
+	# footprint so a shot fired "behind" the mecha can disappear behind the body
+	# immediately instead of being sorted by the muzzle's elevated screen Y.
+	if point.distance_squared_to(origin) <= 4.0:
+		return owner_ground.y
+	if point.distance_squared_to(owner_center) <= 4.0:
+		return owner_ground.y
+	return point.y
+
+func _depth_index_for_y(depth_y: float, bias: int = 0) -> int:
+	return clampi(int(round(depth_y)) + bias, -3000, 3000)
+
+func _depth_index_for_point(point: Vector2, bias: int = 0) -> int:
+	return _depth_index_for_y(_depth_y_for_point(point), bias)
+
+func _set_fx_depth(node: Node2D, ground_point: Vector2, bias: int = 0) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	node.z_as_relative = false
+	node.z_index = _depth_index_for_point(ground_point, bias)
+
+func _player_depth_boundary() -> float:
+	# Matches MechaController._update_depth_order(): ground Y + 2.
+	return owner_ground.y + 2.0
+
+func _clear_depth_lines(container: Node2D) -> void:
+	if container == null:
+		return
+	for child in container.get_children():
+		if child is Line2D:
+			container.remove_child(child)
+			child.free()
+
+func _make_depth_line_piece(
+	container: Node2D,
+	from: Vector2,
+	to: Vector2,
+	depth_from: Vector2,
+	depth_to: Vector2,
+	color: Color,
+	glow_color: Color
+) -> void:
+	var average_depth_y := (
+		_depth_y_for_point(depth_from)
+		+ _depth_y_for_point(depth_to)
+	) * 0.5
+	var piece_z := _depth_index_for_y(average_depth_y)
+
+	if glow_color.a > 0.0:
+		var glow := Line2D.new()
+		glow.width = BLOOM_PIXEL
+		glow.default_color = glow_color
+		glow.antialiased = false
+		glow.use_parent_material = true
+		glow.z_as_relative = false
+		glow.z_index = piece_z
+		glow.add_point(from.round())
+		glow.add_point(to.round())
+		container.add_child(glow)
+
+	var core := Line2D.new()
+	core.width = CORE_PIXEL
+	core.default_color = color
+	core.antialiased = false
+	core.use_parent_material = true
+	core.z_as_relative = false
+	core.z_index = piece_z
+	core.add_point(from.round())
+	core.add_point(to.round())
+	container.add_child(core)
+
+func _append_depth_sorted_segment(
+	container: Node2D,
+	visual_from: Vector2,
+	visual_to: Vector2,
+	depth_from: Vector2,
+	depth_to: Vector2,
+	color: Color,
+	glow_color: Color
+) -> void:
+	var a_depth := _depth_y_for_point(depth_from)
+	var b_depth := _depth_y_for_point(depth_to)
+	var normalized_depth_from := Vector2(depth_from.x, a_depth)
+	var normalized_depth_to := Vector2(depth_to.x, b_depth)
+	var boundary := _player_depth_boundary()
+
+	# Split a trajectory exactly where it crosses the mecha's depth plane. That
+	# lets one beam/ring/web strand render behind the chassis on its far half and
+	# in front on its near half instead of assigning the entire line one layer.
+	var crosses := (
+		(a_depth < boundary and b_depth > boundary)
+		or (a_depth > boundary and b_depth < boundary)
+	)
+
+	if crosses and absf(b_depth - a_depth) > 0.001:
+		var split_t := clampf(
+			(boundary - a_depth) / (b_depth - a_depth),
+			0.0,
+			1.0
+		)
+		var visual_split := visual_from.lerp(visual_to, split_t).round()
+		var depth_split := normalized_depth_from.lerp(
+			normalized_depth_to,
+			split_t
+		).round()
+
+		_make_depth_line_piece(
+			container,
+			visual_from,
+			visual_split,
+			normalized_depth_from,
+			depth_split,
+			color,
+			glow_color
+		)
+		_make_depth_line_piece(
+			container,
+			visual_split,
+			visual_to,
+			depth_split,
+			normalized_depth_to,
+			color,
+			glow_color
+		)
+		return
+
+	_make_depth_line_piece(
+		container,
+		visual_from,
+		visual_to,
+		normalized_depth_from,
+		normalized_depth_to,
+		color,
+		glow_color
+	)
+
+func _refresh_depth_line(
+	container: Node2D,
+	from: Vector2,
+	to: Vector2,
+	color: Color,
+	glow_color: Color
+) -> void:
+	if container == null or not is_instance_valid(container):
+		return
+	_clear_depth_lines(container)
+	_append_depth_sorted_segment(
+		container,
+		from,
+		to,
+		from,
+		to,
+		color,
+		glow_color
+	)
+
+func _refresh_depth_polyline(
+	container: Node2D,
+	visual_points: PackedVector2Array,
+	color: Color,
+	glow_color: Color
+) -> void:
+	_refresh_depth_polyline_with_depth(
+		container,
+		visual_points,
+		color,
+		glow_color,
+		PackedVector2Array()
+	)
+
+func _refresh_depth_polyline_with_depth(
+	container: Node2D,
+	visual_points: PackedVector2Array,
+	color: Color,
+	glow_color: Color,
+	depth_points: PackedVector2Array
+) -> void:
+	if container == null or not is_instance_valid(container):
+		return
+	_clear_depth_lines(container)
+
+	if visual_points.size() < 2:
+		return
+
+	var use_custom_depth := depth_points.size() == visual_points.size()
+	for i in range(visual_points.size() - 1):
+		var depth_a := depth_points[i] if use_custom_depth else visual_points[i]
+		var depth_b := depth_points[i + 1] if use_custom_depth else visual_points[i + 1]
+		_append_depth_sorted_segment(
+			container,
+			visual_points[i],
+			visual_points[i + 1],
+			depth_a,
+			depth_b,
+			color,
+			glow_color
+		)
+
+func _update_depth_line_endpoint(container: Node2D, to: Vector2) -> void:
+	if container == null or not is_instance_valid(container):
+		return
+	if not container.has_meta("depth_line_from"):
+		return
+	var from: Vector2 = container.get_meta("depth_line_from")
+	var core: Color = container.get_meta("depth_line_core")
+	var glow: Color = container.get_meta("depth_line_glow")
+	_refresh_depth_line(container, from, to.round(), core, glow)
+
+func _path_depth_groups(points: PackedVector2Array) -> Array:
+	var groups: Array = []
+	if points.size() < 2:
+		return groups
+
+	var boundary := _player_depth_boundary()
+	var active_points := PackedVector2Array()
+	var active_front := false
+	var has_active := false
+	var active_length := 0.0
+
+	for i in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		var a_depth := _depth_y_for_point(a)
+		var b_depth := _depth_y_for_point(b)
+		var pieces: Array = []
+
+		var crosses := (
+			(a_depth < boundary and b_depth > boundary)
+			or (a_depth > boundary and b_depth < boundary)
+		)
+
+		if crosses and absf(b_depth - a_depth) > 0.001:
+			var split_t := clampf(
+				(boundary - a_depth) / (b_depth - a_depth),
+				0.0,
+				1.0
+			)
+			var split := a.lerp(b, split_t).round()
+			pieces.append(PackedVector2Array([a.round(), split]))
+			pieces.append(PackedVector2Array([split, b.round()]))
+		else:
+			pieces.append(PackedVector2Array([a.round(), b.round()]))
+
+		for piece in pieces:
+			var piece_points: PackedVector2Array = piece
+			var midpoint := piece_points[0].lerp(piece_points[1], 0.5)
+			var front := _depth_y_for_point(midpoint) > boundary
+			var piece_length := piece_points[0].distance_to(piece_points[1])
+
+			if not has_active or front != active_front:
+				if has_active and active_points.size() >= 2:
+					groups.append({
+						"points": active_points,
+						"front": active_front,
+						"length": active_length,
+					})
+				active_points = PackedVector2Array([
+					piece_points[0],
+					piece_points[1],
+				])
+				active_front = front
+				active_length = piece_length
+				has_active = true
+			else:
+				if active_points[active_points.size() - 1].distance_squared_to(piece_points[0]) > 0.25:
+					active_points.append(piece_points[0])
+				active_points.append(piece_points[1])
+				active_length += piece_length
+
+	if has_active and active_points.size() >= 2:
+		groups.append({
+			"points": active_points,
+			"front": active_front,
+			"length": active_length,
+		})
+
+	return groups
+
 func _spawn_follow_particles(target_node: Node2D, core: Color, glow: Color, duration: float, rate: float = 52.0) -> void:
 	if target_node == null or root == null:
 		return
 	var emitter := AbilityParticleScript.new() as SpacehaulAbilityParticles
 	root.add_child(emitter)
 	emitter.setup_follow(target_node, core, glow, _particle_profile(), duration, rate)
+	# The spawning projectile/head has already been placed on the correct
+	# isometric layer, so its attached trail begins on that exact layer too.
+	emitter.z_as_relative = false
+	emitter.z_index = target_node.z_index
 
 func _spawn_path_particles(points: PackedVector2Array, core: Color, glow: Color, count: int = 7, life: float = 0.20) -> void:
 	if root == null or points.size() < 2:
 		return
-	var emitter := AbilityParticleScript.new() as SpacehaulAbilityParticles
-	root.add_child(emitter)
-	emitter.setup_path(points, core, glow, _particle_profile(), count, life)
+
+	var groups := _path_depth_groups(points)
+	if groups.is_empty():
+		return
+
+	var total_length := 0.0
+	for group_value in groups:
+		var group: Dictionary = group_value
+		total_length += float(group.get("length", 0.0))
+	total_length = maxf(total_length, 0.001)
+
+	for group_value in groups:
+		var group: Dictionary = group_value
+		var group_points: PackedVector2Array = group.get("points", PackedVector2Array())
+		if group_points.size() < 2:
+			continue
+		var group_length := float(group.get("length", 0.0))
+		var group_count := clampi(
+			int(round(float(count) * group_length / total_length)),
+			2,
+			maxi(2, count)
+		)
+		var emitter := AbilityParticleScript.new() as SpacehaulAbilityParticles
+		root.add_child(emitter)
+		emitter.setup_path(
+			group_points,
+			core,
+			glow,
+			_particle_profile(),
+			group_count,
+			life
+		)
+
+		var sample := group_points[0].lerp(
+			group_points[group_points.size() - 1],
+			0.5
+		)
+		var depth := _depth_index_for_point(sample)
+		var player_depth := _depth_index_for_y(owner_ground.y + 2.0)
+		if bool(group.get("front", false)):
+			emitter.z_index = maxi(depth, player_depth + 1)
+		else:
+			emitter.z_index = mini(depth, player_depth - 1)
+		emitter.z_as_relative = false
 
 func _spawn_impact_particles(at: Vector2, core: Color, glow: Color, radius: float) -> void:
 	if root == null:
@@ -233,32 +569,30 @@ func _spawn_impact_particles(at: Vector2, core: Color, glow: Color, radius: floa
 	var count := clampi(int(round(radius * 0.42)), 5, 12)
 	var speed := clampf(radius * 1.35, 18.0, 46.0)
 	emitter.setup_burst(at.round(), core, glow, _particle_profile(), count, speed, 0.24)
+	_set_fx_depth(emitter, at, 0)
 
 func _line(from: Vector2, to: Vector2, color: Color, glow_color: Color = Color.TRANSPARENT) -> Node2D:
 	var container := Node2D.new()
 	container.z_as_relative = false
-	container.z_index = 1700
+	container.z_index = 0
 	root.add_child(container)
-	if glow_color.a > 0.0:
-		var glow := Line2D.new()
-		glow.width = BLOOM_PIXEL
-		glow.default_color = glow_color
-		glow.antialiased = false
-		glow.use_parent_material = true
-		glow.add_point(from.round())
-		glow.add_point(to.round())
-		container.add_child(glow)
-	var core := Line2D.new()
-	core.width = CORE_PIXEL
-	core.default_color = color
-	core.antialiased = false
-	core.use_parent_material = true
-	core.add_point(from.round())
-	core.add_point(to.round())
-	container.add_child(core)
+
 	var additive := CanvasItemMaterial.new()
 	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	container.material = additive
+
+	container.set_meta("depth_line_from", from.round())
+	container.set_meta("depth_line_core", color)
+	container.set_meta("depth_line_glow", glow_color)
+
+	_refresh_depth_line(
+		container,
+		from.round(),
+		to.round(),
+		color,
+		glow_color
+	)
+
 	if from.distance_to(to) >= 32.0 and _rng.randf() < 0.58:
 		_spawn_path_particles(
 			PackedVector2Array([from.round(), to.round()]),
@@ -272,28 +606,20 @@ func _line(from: Vector2, to: Vector2, color: Color, glow_color: Color = Color.T
 func _polyline(points: PackedVector2Array, color: Color, glow_color: Color = Color.TRANSPARENT) -> Node2D:
 	var container := Node2D.new()
 	container.z_as_relative = false
-	container.z_index = 1700
+	container.z_index = 0
 	root.add_child(container)
-	if glow_color.a > 0.0:
-		var glow := Line2D.new()
-		glow.width = BLOOM_PIXEL
-		glow.default_color = glow_color
-		glow.antialiased = false
-		glow.use_parent_material = true
-		for point in points:
-			glow.add_point(point.round())
-		container.add_child(glow)
-	var core := Line2D.new()
-	core.width = CORE_PIXEL
-	core.default_color = color
-	core.antialiased = false
-	core.use_parent_material = true
-	for point in points:
-		core.add_point(point.round())
-	container.add_child(core)
+
 	var additive := CanvasItemMaterial.new()
 	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	container.material = additive
+
+	_refresh_depth_polyline(
+		container,
+		points,
+		color,
+		glow_color
+	)
+
 	var total_length := 0.0
 	for i in range(points.size() - 1):
 		total_length += points[i].distance_to(points[i + 1])
@@ -325,7 +651,7 @@ func _make_arc_ground_shadow(at: Vector2) -> Polygon2D:
 	shadow.color = Color(0.02, 0.025, 0.035, 0.42)
 	shadow.global_position = at.round()
 	shadow.z_as_relative = false
-	shadow.z_index = clampi(int(round(at.y)) + 2, -3000, 3000)
+	shadow.z_index = _depth_index_for_point(at, -1)
 	root.add_child(shadow)
 	return shadow
 
@@ -336,9 +662,9 @@ func _pulse_ring(center: Vector2, radius: float, core: Color, glow: Color, life:
 		var angle := phase + TAU * float(i) / float(count)
 		points.append(IsoVfx.ground_point(center, angle, radius).round())
 	var ring := _polyline(points, core, glow)
-	# Ground rings participate in the deck's Y-depth instead of always rendering
-	# above every wall. Foreground geometry can now naturally cross in front.
-	ring.z_index = clampi(int(round(center.y)) + 4, -3000, 3000)
+	# _polyline() depth-sorts every arc segment independently. The far half of a
+	# ring can therefore disappear behind the chassis while the near half remains
+	# visible in front, which is the isometric read we want.
 	_fade_free(ring, life)
 	return ring
 
@@ -347,6 +673,7 @@ func _spark_pixels(at: Vector2, core: Color, glow: Color, count: int, travel_rad
 		var pixel := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(pixel)
 		pixel.setup(at, core, glow, 1.0, true)
+		_set_fx_depth(pixel, at, 1)
 		var angle := TAU * float(i) / float(maxi(1, count)) + _rng.randf_range(-0.16, 0.16)
 		var distance := travel_radius * _rng.randf_range(0.55, 1.0)
 		var destination := (at + IsoVfx.ground_offset(angle, distance)).round()
@@ -366,6 +693,7 @@ func _dotted_trace(from: Vector2, to: Vector2, core: Color, glow: Color, spacing
 		var pixel := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(pixel)
 		pixel.setup(p, core, glow, 1.0)
+		_set_fx_depth(pixel, p, 1)
 		var tween := root.create_tween()
 		tween.tween_property(pixel, "modulate:a", 0.0, life)
 		tween.tween_callback(pixel.queue_free)
@@ -374,6 +702,7 @@ func _explode(at: Vector2, core: Color = Color(3.0, 1.5, 0.45, 1.0), glow: Color
 	var fx := ExplosionScript.new() as SpacehaulSpecialExplosion
 	root.add_child(fx)
 	fx.setup(at.round(), core, glow, radius * impact_scale, 0.28, not preview_mode)
+	_set_fx_depth(fx, at, 0)
 	_spawn_impact_particles(at, core, glow, radius * impact_scale)
 	_damage_radius(at, hit_radius * impact_scale, (at - owner_ground).normalized())
 
@@ -527,8 +856,15 @@ func _straight_shot_from(start: Vector2, dest: Vector2, core: Color, glow: Color
 	var projectile := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 	root.add_child(projectile)
 	projectile.setup(start.round(), core, glow, 1.0)
+	_set_fx_depth(projectile, Vector2(start.x, _depth_y_for_point(start)), 1)
 	_spawn_follow_particles(projectile, core, glow, travel_time + 0.05, 58.0)
-	var tracer := _line(start, dest, Color(core.r, core.g, core.b, 0.72), Color(glow.r, glow.g, glow.b, 0.22))
+
+	var tracer := _line(
+		start,
+		dest,
+		Color(core.r, core.g, core.b, 0.72),
+		Color(glow.r, glow.g, glow.b, 0.22)
+	)
 	_fade_free(tracer, minf(0.12, travel_time))
 
 	# The visible tracer is a real attack trajectory. Enemies touching it now
@@ -536,9 +872,25 @@ func _straight_shot_from(start: Vector2, dest: Vector2, core: Color, glow: Color
 	# every other damaging line-based special ability.
 	_damage_line(start, dest, 4.0)
 
-	var tween := root.create_tween()
-	tween.tween_property(projectile, "global_position", dest.round(), travel_time)
-	await tween.finished
+	# A normal Tween can move the projectile, but it cannot update its isometric
+	# depth as it crosses the chassis plane. Advance it explicitly so the shot can
+	# start behind the mecha and emerge in front (or the reverse) during flight.
+	var elapsed := 0.0
+	var ground_start := Vector2(start.x, _depth_y_for_point(start))
+	while elapsed < travel_time:
+		await get_tree().process_frame
+		elapsed += get_process_delta_time()
+		var t := clampf(
+			elapsed / maxf(travel_time, 0.001),
+			0.0,
+			1.0
+		)
+		var visual_p := start.lerp(dest, t).round()
+		var depth_p := ground_start.lerp(dest, t).round()
+		if is_instance_valid(projectile):
+			projectile.global_position = visual_p
+			_set_fx_depth(projectile, depth_p, 1)
+
 	if is_instance_valid(projectile):
 		projectile.queue_free()
 	_explode(dest, core, glow, explode_radius, explode_radius)
@@ -556,31 +908,28 @@ func _arc_shot_from(
 	var projectile := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 	root.add_child(projectile)
 	projectile.setup(start.round(), core, glow, 1.0)
-	_spawn_follow_particles(projectile, core, glow, travel_time + 0.08, 64.0)
-	var ground_shadow := _make_arc_ground_shadow(start)
 
+	var ground_start := Vector2(start.x, _depth_y_for_point(start)).round()
+	_set_fx_depth(projectile, ground_start, 1)
+	_spawn_follow_particles(projectile, core, glow, travel_time + 0.08, 64.0)
+	var ground_shadow := _make_arc_ground_shadow(ground_start)
+
+	# The arc trail needs two coordinate sets: visual points rise above the deck,
+	# while depth points remain on the projected ground path. Sorting by the
+	# elevated Y would incorrectly make a high projectile appear "behind"
+	# everything just because it moved upward on screen.
 	var trail_container := Node2D.new()
 	trail_container.z_as_relative = false
-	trail_container.z_index = 1699
+	trail_container.z_index = 0
 	root.add_child(trail_container)
-
-	var trail_glow := Line2D.new()
-	trail_glow.width = BLOOM_PIXEL
-	trail_glow.default_color = Color(glow.r, glow.g, glow.b, 0.24)
-	trail_glow.antialiased = false
-	trail_glow.use_parent_material = true
-	trail_container.add_child(trail_glow)
-
-	var trail_core := Line2D.new()
-	trail_core.width = CORE_PIXEL
-	trail_core.default_color = Color(core.r, core.g, core.b, 0.78)
-	trail_core.antialiased = false
-	trail_core.use_parent_material = true
-	trail_container.add_child(trail_core)
-
 	var additive := CanvasItemMaterial.new()
 	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	trail_container.material = additive
+
+	var trail_visual_points := PackedVector2Array()
+	var trail_depth_points := PackedVector2Array()
+	trail_visual_points.append(start.round())
+	trail_depth_points.append(ground_start)
 
 	var elapsed := 0.0
 	var live_dest := dest.round()
@@ -606,27 +955,35 @@ func _arc_shot_from(
 			1.0
 		)
 
+		var ground_p := ground_start.lerp(live_dest, t).round()
 		var p := start.lerp(live_dest, t)
 		p.y -= sin(t * PI) * arc_height
 		p = p.round()
 
 		if is_instance_valid(projectile):
 			projectile.global_position = p
+			_set_fx_depth(projectile, ground_p, 1)
 
 		if is_instance_valid(ground_shadow):
-			var ground_p := start.lerp(live_dest, t).round()
 			var height_factor := sin(t * PI)
 			ground_shadow.global_position = ground_p
-			ground_shadow.z_index = clampi(int(round(ground_p.y)) + 2, -3000, 3000)
+			_set_fx_depth(ground_shadow, ground_p, -1)
 			ground_shadow.scale = Vector2.ONE * lerpf(1.0, 0.62, height_factor)
 			ground_shadow.modulate.a = lerpf(0.82, 0.38, height_factor)
 
-		trail_glow.add_point(p)
-		trail_core.add_point(p)
+		trail_visual_points.append(p)
+		trail_depth_points.append(ground_p)
+		if trail_visual_points.size() > 24:
+			trail_visual_points.remove_at(0)
+			trail_depth_points.remove_at(0)
 
-		if trail_core.get_point_count() > 24:
-			trail_core.remove_point(0)
-			trail_glow.remove_point(0)
+		_refresh_depth_polyline_with_depth(
+			trail_container,
+			trail_visual_points,
+			Color(core.r, core.g, core.b, 0.78),
+			Color(glow.r, glow.g, glow.b, 0.24),
+			trail_depth_points
+		)
 
 	if is_instance_valid(projectile):
 		projectile.queue_free()
@@ -826,11 +1183,6 @@ func _m1_traveling_cleaver_wave(
 			glow
 		)
 
-		blade.z_index = clampi(
-			int(round(owner_ground.y)) + 5,
-			-3000,
-			3000
-		)
 
 		_fade_free(
 			blade,
@@ -1028,6 +1380,10 @@ func _ability_impact_fx(
 		0.28,
 		play_sound and not preview_mode
 	)
+	# Impact sprites use their deck contact point for depth. An explosion behind
+	# the chassis now stays behind it instead of inheriting SpecialExplosion's
+	# intentionally attention-grabbing +80 legacy offset.
+	_set_fx_depth(fx, at, 0)
 
 	_spawn_impact_particles(
 		at,
@@ -1569,6 +1925,7 @@ func _m2_project_vector_harpoons(
 		var head := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(head)
 		head.setup(origin.round(), core, Color(0.2, 1.0, 1.55, 1.0), 1.0, true)
+		_set_fx_depth(head, owner_ground, 1)
 		heads.append(head)
 
 		var tether := _line(origin, origin, core, glow)
@@ -1588,12 +1945,10 @@ func _m2_project_vector_harpoons(
 
 			if i < heads.size() and is_instance_valid(heads[i]):
 				heads[i].global_position = current
+				_set_fx_depth(heads[i], current, 1)
 
 			if i < tethers.size() and is_instance_valid(tethers[i]):
-				for child in tethers[i].get_children():
-					var line := child as Line2D
-					if line != null and line.get_point_count() >= 2:
-						line.set_point_position(1, current)
+				_update_depth_line_endpoint(tethers[i], current)
 
 		await _sleep(travel_time / float(steps))
 
@@ -1717,6 +2072,7 @@ func _m2_anchor_release_wave(
 		var shard := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(shard)
 		shard.setup(owner_ground, core, glow, 1.0, true)
+		_set_fx_depth(shard, owner_ground, 1)
 		shards.append(shard)
 
 	var steps := 10
@@ -1740,10 +2096,12 @@ func _m2_anchor_release_wave(
 			if i >= shards.size() or not is_instance_valid(shards[i]):
 				continue
 
-			shards[i].global_position = owner_ground.lerp(
+			var shard_position := owner_ground.lerp(
 				endpoints[i],
 				blast_t
 			).round()
+			shards[i].global_position = shard_position
+			_set_fx_depth(shards[i], shard_position, 1)
 
 		await _sleep(0.018)
 
@@ -2226,6 +2584,7 @@ func _r1_prism_lance() -> void:
 			1.0,
 			true
 		)
+		_set_fx_depth(head, start, 1)
 		_spawn_follow_particles(head, core, impact_glow, 0.24, 46.0)
 		heads.append(head)
 
@@ -2244,12 +2603,10 @@ func _r1_prism_lance() -> void:
 
 			if i < heads.size() and is_instance_valid(heads[i]):
 				heads[i].global_position = current
+				_set_fx_depth(heads[i], current, 1)
 
 			if i < beams.size() and is_instance_valid(beams[i]):
-				for child in beams[i].get_children():
-					var line := child as Line2D
-					if line != null and line.get_point_count() >= 2:
-						line.set_point_position(1, current)
+				_update_depth_line_endpoint(beams[i], current)
 
 		await _sleep(travel_time / float(steps))
 
@@ -2437,6 +2794,7 @@ func _r2_breach_cannon() -> void:
 		1.25,
 		true
 	)
+	_set_fx_depth(slug_head, owner_ground, 1)
 	_spawn_follow_particles(
 		slug_head,
 		core,
@@ -2485,12 +2843,10 @@ func _r2_breach_cannon() -> void:
 
 		if is_instance_valid(slug_head):
 			slug_head.global_position = current
+			_set_fx_depth(slug_head, current, 1)
 
 		if is_instance_valid(slug_trail):
-			for child in slug_trail.get_children():
-				var line := child as Line2D
-				if line != null and line.get_point_count() >= 2:
-					line.set_point_position(1, current)
+			_update_depth_line_endpoint(slug_trail, current)
 
 		if tier >= 1:
 			var left_offset := IsoVfx.ground_perpendicular_offset(
@@ -2503,16 +2859,10 @@ func _r2_breach_cannon() -> void:
 			)
 
 			if rail_a != null and is_instance_valid(rail_a):
-				for child in rail_a.get_children():
-					var line := child as Line2D
-					if line != null and line.get_point_count() >= 2:
-						line.set_point_position(1, current + left_offset)
+				_update_depth_line_endpoint(rail_a, current + left_offset)
 
 			if rail_b != null and is_instance_valid(rail_b):
-				for child in rail_b.get_children():
-					var line := child as Line2D
-					if line != null and line.get_point_count() >= 2:
-						line.set_point_position(1, current + right_offset)
+				_update_depth_line_endpoint(rail_b, current + right_offset)
 
 		# Tiny floor ruptures make the shell feel mechanically heavy without
 		# adding extra gameplay hits along the corridor.
@@ -2782,6 +3132,7 @@ func _r3_run_dive_salvo(
 				1.0,
 				true
 			)
+			_set_fx_depth(launch_head, owner_ground, 1)
 			launch_heads.append(launch_head)
 
 			_spawn_follow_particles(
@@ -2888,6 +3239,7 @@ func _r3_run_dive_salvo(
 					1.0 + float(tier) * 0.04,
 					true
 				)
+				_set_fx_depth(missile, live_dest, 1)
 				dive_nodes[i] = missile
 
 				_spawn_follow_particles(
@@ -2923,13 +3275,24 @@ func _r3_run_dive_salvo(
 			var missile_node := dive_nodes[i] as Node2D
 			if missile_node != null and is_instance_valid(missile_node):
 				missile_node.global_position = p
+				# The missile is descending vertically over its target. Sort it from the
+				# target's deck footprint, not its elevated screen Y.
+				_set_fx_depth(missile_node, live_dest, 1)
 
 			var trail_node := dive_trails[i] as Node2D
 			if trail_node != null and is_instance_valid(trail_node):
-				for child in trail_node.get_children():
-					var line := child as Line2D
-					if line != null and line.get_point_count() >= 2:
-						line.set_point_position(1, p)
+				# Keep the full dive streak on the target's depth plane. This preserves
+				# altitude visually without making "higher" screen pixels sort behind
+				# unrelated floor geometry.
+				var trail_visual := PackedVector2Array([dive_starts[i], p])
+				var trail_depth := PackedVector2Array([live_dest, live_dest])
+				_refresh_depth_polyline_with_depth(
+					trail_node,
+					trail_visual,
+					Color(core.r, core.g, core.b, 0.90),
+					trail_glow,
+					trail_depth
+				)
 
 			if local_t >= 1.0:
 				impacted[i] = true
@@ -3099,6 +3462,40 @@ func _r3_flak_dome() -> void:
 	var destinations: Array[Vector2] = []
 	var tracking_ids: Array[int] = []
 
+	# Missile Halo remains a protected annulus around Hunter, but it now behaves
+	# like a true smart-missile defensive screen. If enemies are inside the halo's
+	# usable combat ring, every missile receives a live target. Unique enemies are
+	# covered first; if there are fewer enemies than missiles, the remaining
+	# missiles cycle back across those same targets instead of wasting shots on
+	# empty saturation points.
+	var halo_targets: Array[Node2D] = []
+	if not preview_mode and get_tree() != null:
+		for node in get_tree().get_nodes_in_group("enemies"):
+			var enemy := node as Node2D
+			if enemy == null or not is_instance_valid(enemy):
+				continue
+			if not enemy.is_inside_tree():
+				continue
+			if not enemy.has_method("take_projectile_hit"):
+				continue
+
+			var collision_body := enemy as CollisionObject2D
+			if collision_body != null and collision_body.collision_layer == 0:
+				continue
+
+			var enemy_distance := IsoVfx.ground_distance(
+				owner_ground,
+				enemy.global_position
+			)
+
+			# Preserve the authored clear pocket immediately around Hunter. Enemies
+			# occupying the actual missile ring, however, are always preferred over
+			# decorative saturation coordinates.
+			if enemy_distance <= safe_radius or enemy_distance > radius:
+				continue
+
+			halo_targets.append(enemy)
+
 	# Telegraph both the protected center and the maximum saturation radius.
 	_pulse_ring(
 		owner_ground,
@@ -3119,10 +3516,9 @@ func _r3_flak_dome() -> void:
 		0.11
 	)
 
-	# Golden-angle placement gives even coverage across the usable annulus instead
-	# of putting every impact on the outside circumference. Because radius rises
-	# as the salvo index rises, the stagger produces a readable outward rolling
-	# bombardment while still feeling irregular enough to be a missile strike.
+	# Golden-angle placement is retained as the no-target fallback. It also gives
+	# each missile a sensible last-known destination if its tracked enemy is killed
+	# while the salvo is already in flight.
 	var golden_angle := 2.39996323
 	var inner := safe_radius + 15.0
 	var outer := radius
@@ -3130,13 +3526,10 @@ func _r3_flak_dome() -> void:
 	for i in range(missile_count):
 		var fraction := float(i + 1) / float(missile_count + 1)
 
-		# sqrt distributes points by AREA rather than clustering everything near
-		# Hunter or the perimeter.
+		# sqrt distributes fallback points by AREA rather than clustering everything
+		# near Hunter or the perimeter.
 		var radial_t := sqrt(fraction)
 		var strike_radius := lerpf(inner, outer, radial_t)
-
-		# Small seeded jitter breaks the mathematical spiral without sacrificing
-		# the even field coverage that makes this better than the old halo.
 		strike_radius *= _rng.randf_range(0.92, 1.03)
 
 		var angle := (
@@ -3150,9 +3543,28 @@ func _r3_flak_dome() -> void:
 			angle,
 			strike_radius
 		).round()
+		var tracking_target_id := 0
+
+		if not halo_targets.is_empty():
+			# Cover every available enemy once before repeating targets. This makes
+			# a crowded halo distribute damage, while a lone dangerous enemy receives
+			# the full defensive barrage.
+			var selected_enemy := halo_targets[i % halo_targets.size()]
+			if selected_enemy != null and is_instance_valid(selected_enemy):
+				tracking_target_id = selected_enemy.get_instance_id()
+				dest = selected_enemy.global_position.round()
+
+				# Only draw one acquisition reticle per unique target. Repeated missiles
+				# still track it, but do not bury the enemy under duplicate lock VFX.
+				if i < halo_targets.size():
+					_show_target_lock(
+						dest,
+						Color(1.45, 2.85, 3.35, 0.94),
+						Color(0.18, 0.82, 1.55, 0.78)
+					)
 
 		destinations.append(dest)
-		tracking_ids.append(0)
+		tracking_ids.append(tracking_target_id)
 
 	await _r3_run_dive_salvo(
 		destinations,
@@ -3243,7 +3655,6 @@ func _r4_emp_crown() -> void:
 			var jitter := _rng.randf_range(-3.0, 3.0)
 			ring_points.append(IsoVfx.ground_point(owner_ground, angle, radius + jitter).round())
 		var ring := _polyline(ring_points, Color(2.6, 1.5, 3.35, 1.0), Color(1.0, 0.25, 1.7, 0.28))
-		ring.z_index = clampi(int(round(owner_ground.y)) + 4, -3000, 3000)
 		_radial_hit(owner_ground, radius + 8.0, true)
 		for i in range(0, point_count, 4):
 			_explode(ring_points[i], Color(2.5, 1.3, 3.2, 1.0), Color(1.0, 0.25, 1.7, 1.0), 8.0, 8.0)
@@ -3279,6 +3690,7 @@ func _s1_project_photon_cut(
 		1.30 if overburn else 1.05,
 		true
 	)
+	_set_fx_depth(head, Vector2(start.x, _depth_y_for_point(start)), 1)
 
 	var travel_time := maxf(
 		0.050,
@@ -3308,12 +3720,10 @@ func _s1_project_photon_cut(
 
 		if is_instance_valid(head):
 			head.global_position = current
+			_set_fx_depth(head, current, 1)
 
 		if is_instance_valid(beam):
-			for child in beam.get_children():
-				var line := child as Line2D
-				if line != null and line.get_point_count() >= 2:
-					line.set_point_position(1, current)
+			_update_depth_line_endpoint(beam, current)
 
 		await _sleep(travel_time / float(steps))
 
@@ -3636,6 +4046,7 @@ func _s2_gravity_collapse(
 		var mote := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(mote)
 		mote.setup(start, core, glow, 1.0, true)
+		_set_fx_depth(mote, start, 1)
 		motes.append(mote)
 
 		if i % 2 == 0:
@@ -3673,10 +4084,12 @@ func _s2_gravity_collapse(
 				lerpf(5.0, 1.0, collapse_t)
 			)
 
-			motes[i].global_position = (
+			var mote_position := (
 				starts[i].lerp(center, collapse_t)
 				+ spiral_offset
 			).round()
+			motes[i].global_position = mote_position
+			_set_fx_depth(motes[i], mote_position, 1)
 
 		await _sleep(0.018)
 
@@ -3830,6 +4243,7 @@ func _s2_mass_ejection_wave(
 		var shard := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(shard)
 		shard.setup(start, core, glow, 1.0, true)
+		_set_fx_depth(shard, start, 1)
 		shards.append(shard)
 
 		if i % 2 == 0:
@@ -3868,10 +4282,12 @@ func _s2_mass_ejection_wave(
 				start_radius
 			)
 
-			shards[i].global_position = start.lerp(
+			var shard_position := start.lerp(
 				endpoints[i],
 				blast_t
 			).round()
+			shards[i].global_position = shard_position
+			_set_fx_depth(shards[i], shard_position, 1)
 
 		await _sleep(0.018)
 
@@ -3980,6 +4396,7 @@ func _s3_phase_needle_volley(
 		var head := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(head)
 		head.setup(start, core, glow, 1.0, true)
+		_set_fx_depth(head, Vector2(start.x, _depth_y_for_point(start)), 1)
 		heads.append(head)
 
 		if i % 2 == 0:
@@ -4037,6 +4454,7 @@ func _s3_phase_needle_volley(
 			)
 
 			heads[i].global_position = current
+			_set_fx_depth(heads[i], current, 1)
 			previous_positions[i] = current
 
 		await _sleep(0.012)
@@ -4166,12 +4584,14 @@ func _s3_phase_web_wave(
 		var anchor := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(anchor)
 		anchor.setup(owner_ground.round(), core, glow, 1.0, true)
+		_set_fx_depth(anchor, owner_ground, 1)
 		anchors.append(anchor)
 
 	# Phase anchors first appear on the inner web, then blink to the outer web.
 	for i in range(anchors.size()):
 		if is_instance_valid(anchors[i]):
 			anchors[i].global_position = inner_points[i]
+			_set_fx_depth(anchors[i], inner_points[i], 1)
 
 	_pulse_ring(
 		owner_ground,
@@ -4201,6 +4621,7 @@ func _s3_phase_web_wave(
 		)
 
 		anchors[i].global_position = outer_points[i]
+		_set_fx_depth(anchors[i], outer_points[i], 1)
 
 	await _sleep(0.018)
 

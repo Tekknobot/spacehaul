@@ -544,11 +544,6 @@ func _make_showroom_ability_cell(row: HBoxContainer, color: Color) -> Label:
 	panel.custom_minimum_size = Vector2(215.0, 34.0)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(color.r * 0.035, color.g * 0.035, color.b * 0.035, 0.88)
-	style.border_width_left = 1
-	style.border_width_top = 1
-	style.border_width_right = 1
-	style.border_width_bottom = 1
-	style.border_color = Color(color.r * 0.36, color.g * 0.36, color.b * 0.36, 0.78)
 	panel.add_theme_stylebox_override("panel", style)
 	row.add_child(panel)
 	var label := Label.new()

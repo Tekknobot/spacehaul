@@ -58,6 +58,7 @@ corner_radius_bottom_left = 4
 
 [node name="CharacterTestDeck" type="Node2D" unique_id=960116902]
 script = ExtResource("1_world")
+video_capture_mode = true
 
 [node name="ProceduralDeck" type="Node2D" parent="." unique_id=1973192649]
 script = ExtResource("2_deck")
