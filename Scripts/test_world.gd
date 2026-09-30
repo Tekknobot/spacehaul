@@ -38,6 +38,12 @@ var _upgrade_overlay: Control
 var _upgrade_title: Label
 var _upgrade_buttons: Array[Button] = []
 var _upgrade_choices: Array[Dictionary] = []
+var _omega_core_stored := false
+var _omega_overlay: Control
+var _omega_title: Label
+var _omega_buttons: Array[Button] = []
+var _omega_choices: Array[Dictionary] = []
+var _hud_omega: Label
 var _rng := RandomNumberGenerator.new()
 
 var _top_hud: Control
@@ -88,6 +94,7 @@ func _ready() -> void:
 	_build_damage_overlay()
 	_build_deck_transition_overlay()
 	_build_upgrade_overlay()
+	_build_omega_overlay()
 	_build_run_summary_overlay()
 	_build_mecha_select_overlay()
 	_set_standard_hud_visible(false)
@@ -137,18 +144,23 @@ func _process(delta: float) -> void:
 	_update_hud()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _upgrade_overlay == null or not _upgrade_overlay.visible:
+	var omega_open := _omega_overlay != null and _omega_overlay.visible
+	var upgrade_open := _upgrade_overlay != null and _upgrade_overlay.visible
+	if not omega_open and not upgrade_open:
 		return
 	if event is InputEventKey:
 		var key_event := event as InputEventKey
 		if not key_event.pressed or key_event.echo:
 			return
 		if key_event.keycode == KEY_1:
-			_choose_upgrade(0)
+			if omega_open: _choose_omega_mutation(0)
+			else: _choose_upgrade(0)
 		elif key_event.keycode == KEY_2:
-			_choose_upgrade(1)
+			if omega_open: _choose_omega_mutation(1)
+			else: _choose_upgrade(1)
 		elif key_event.keycode == KEY_3:
-			_choose_upgrade(2)
+			if omega_open: _choose_omega_mutation(2)
+			else: _choose_upgrade(2)
 
 func get_run_time() -> float:
 	return _run_time
@@ -166,6 +178,35 @@ func collect_salvage(amount: int) -> void:
 	SFX.play(self, "salvage", -18.0, clampf(0.94 + float(_salvage % 6) * 0.025, 0.94, 1.08))
 	_update_hud()
 	_check_level_up()
+
+func can_receive_omega_core() -> bool:
+	if _game_over or _run_complete or _omega_core_stored:
+		return false
+	var active := mecha_manager.get_active_mecha()
+	if active == null or active.mecha_id != "M1":
+		return false
+	return not active.has_legendary_mutation()
+
+func collect_omega_core() -> void:
+	if not can_receive_omega_core():
+		return
+	_omega_core_stored = true
+	_update_hud()
+	_show_banner("OMEGA CORE ACQUIRED", 0.82)
+	call_deferred("_try_open_omega_mutation")
+
+func _try_open_omega_mutation() -> void:
+	if not _omega_core_stored or _game_over or _run_complete or _menu_open:
+		return
+	if _upgrade_overlay != null and _upgrade_overlay.visible:
+		return
+	if _omega_overlay != null and _omega_overlay.visible:
+		return
+	var active := mecha_manager.get_active_mecha()
+	if active == null or not active.can_accept_omega_mutation():
+		_show_banner("OMEGA CORE STORED\nMAX PLASMA CLEAVER TO MUTATE", 0.95)
+		return
+	_present_omega_choices()
 
 func _check_level_up() -> void:
 	if _upgrade_overlay != null and _upgrade_overlay.visible:
@@ -221,6 +262,8 @@ func _on_player_destroyed(_mecha: MechaController) -> void:
 	enemy_manager.set_spawning_enabled(false)
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
+	if _omega_overlay != null:
+		_omega_overlay.hide()
 	_show_run_summary(false)
 
 func _complete_run() -> void:
@@ -423,6 +466,8 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 	enemy_manager.set_spawning_enabled(false)
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
+	if _omega_overlay != null:
+		_omega_overlay.hide()
 	if _run_summary_overlay != null:
 		_run_summary_overlay.hide()
 	if deck_banner != null:
@@ -460,6 +505,9 @@ func _start_selected_run() -> void:
 	_salvage = 0
 	_salvage_required = 6
 	_salvage_magnet_radius = 86.0
+	_omega_core_stored = false
+	if _omega_overlay != null:
+		_omega_overlay.hide()
 	deck.set_deck_palette(_deck_number)
 	deck.generate_new_level()
 	mecha_manager.start_new_run_with_mecha(_selected_mecha_id)
@@ -695,6 +743,7 @@ func _update_hud() -> void:
 		_hud_hull.text = "HULL: NA"
 		_hud_level.text = "LV: %02d" % _level
 		_hud_salvage.text = "SALV: %02d/%02d" % [_salvage, _salvage_required]
+		_hud_omega.text = "OMEGA --"
 		_hud_time.text = _format_time(_run_time)
 		_hud_deck.text = "DECK: %d %s" % [
 			_deck_number,
@@ -713,6 +762,19 @@ func _update_hud() -> void:
 		_salvage,
 		_salvage_required
 	]
+	if active.has_legendary_mutation():
+		match active.get_legendary_mutation():
+			"omega_edge": _hud_omega.text = "OMEGA EDGE"
+			"atlas_crown": _hud_omega.text = "OMEGA CROWN"
+			"world_breaker": _hud_omega.text = "OMEGA BREAK"
+			_: _hud_omega.text = "OMEGA ON"
+	elif _omega_core_stored:
+		_hud_omega.text = "OMEGA HELD"
+	elif active.mecha_id == "M1" and active.get_primary_ability_tier() >= 3:
+		# Tier III means ATLAS is eligible for a Core; it does not mean a Core has dropped.
+		_hud_omega.text = "OMEGA SEEK"
+	else:
+		_hud_omega.text = "OMEGA --"
 	_hud_time.text = _format_time(_run_time)
 	_hud_deck.text = "DECK %d %s" % [
 		_deck_number,
@@ -796,6 +858,8 @@ func _build_compact_hud() -> void:
 	_hud_hull = _make_stat_cell(row, Color(0.45, 1.0, 0.72, 1.0))
 	_hud_level = _make_stat_cell(row, Color(0.80, 0.62, 1.0, 1.0))
 	_hud_salvage = _make_stat_cell(row, Color(1.0, 0.80, 0.38, 1.0))
+	_hud_omega = _make_stat_cell(row, Color(0.96, 0.44, 1.0, 1.0))
+	_hud_omega.add_theme_font_size_override("font_size", 13)
 	_hud_time = _make_stat_cell(row, Color(0.72, 0.88, 0.96, 1.0))
 	_hud_deck = _make_stat_cell(row, Color(0.47, 0.76, 1.0, 1.0))
 	_hud_hostiles = _make_stat_cell(row, Color(1.0, 0.48, 0.34, 1.0))
@@ -823,7 +887,7 @@ func _make_stat_cell(row: HBoxContainer, color: Color) -> Label:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	label.add_theme_font_size_override("font_size", 16)
+	label.add_theme_font_size_override("font_size", 13)
 	label.add_theme_color_override("font_color", color)
 	panel.add_child(label)
 	return label
@@ -968,6 +1032,8 @@ func _show_run_summary(completed: bool) -> void:
 	enemy_manager.set_spawning_enabled(false)
 	if _upgrade_overlay != null:
 		_upgrade_overlay.hide()
+	if _omega_overlay != null:
+		_omega_overlay.hide()
 	if _mecha_select_overlay != null:
 		_mecha_select_overlay.hide()
 	if deck_banner != null:
@@ -979,7 +1045,7 @@ func _show_run_summary(completed: bool) -> void:
 	if active == null and chassis == "NONE":
 		chassis = "MECHA"
 	var best := _record_and_get_best_time(_run_time)
-	_run_summary_title.text = "EXTRACTION COMPLETE" if completed else "GAME OVER   //   MECHA LOST"
+	_run_summary_title.text = "RUN COMPLETE" if completed else "GAME OVER   //   MECHA LOST"
 	_run_summary_text.text = "SURVIVED   %s\nKILLS      %03d\nLEVEL      %02d\nDECK       %02d\nCHASSIS    %s\nBEST       %s" % [
 		_format_time(_run_time), enemy_manager.get_total_kills(), _level, _deck_number, chassis, _format_time(best)
 	]
@@ -1080,6 +1146,103 @@ func _build_upgrade_overlay() -> void:
 		box.add_child(button)
 		_upgrade_buttons.append(button)
 
+func _build_omega_overlay() -> void:
+	_omega_overlay = CenterContainer.new()
+	_omega_overlay.name = "OmegaMutationOverlay"
+	_omega_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_omega_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_omega_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	_omega_overlay.visible = false
+	hud.add_child(_omega_overlay)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(560.0, 304.0)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.035, 0.012, 0.052, 0.975)
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.border_color = Color(0.88, 0.22, 1.0, 0.95)
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_left = 4
+	style.corner_radius_bottom_right = 4
+	panel.add_theme_stylebox_override("panel", style)
+	_omega_overlay.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 9)
+	margin.add_child(box)
+	var font_large := load("res://Fonts/mago2.ttf") as Font
+	var font_small := load("res://Fonts/mago1.ttf") as Font
+
+	_omega_title = Label.new()
+	_omega_title.text = "OMEGA MUTATION   M1 ATLAS"
+	_omega_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_omega_title.add_theme_font_override("font", font_large)
+	_omega_title.add_theme_font_size_override("font_size", 34)
+	_omega_title.add_theme_color_override("font_color", Color(1.0, 0.55, 1.0, 1.0))
+	box.add_child(_omega_title)
+
+	var hint := Label.new()
+	hint.text = "PLASMA CLEAVER // SELECT ONE LEGENDARY EVOLUTION   1  2  3"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_override("font", font_small)
+	hint.add_theme_font_size_override("font_size", 15)
+	hint.add_theme_color_override("font_color", Color(0.78, 0.62, 0.82, 1.0))
+	box.add_child(hint)
+
+	for index in range(3):
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(510.0, 58.0)
+		button.add_theme_font_override("font", font_small)
+		button.add_theme_font_size_override("font_size", 15)
+		button.focus_mode = Control.FOCUS_ALL
+		button.pressed.connect(_choose_omega_mutation.bind(index))
+		box.add_child(button)
+		_omega_buttons.append(button)
+
+func _present_omega_choices() -> void:
+	_omega_choices = [
+		{"id": "omega_edge", "label": "OMEGA EDGE   TRIPLE COLOSSAL FORWARD CLEAVE"},
+		{"id": "atlas_crown", "label": "ATLAS CROWN   SIX CLEAVES ERUPT IN ALL DIRECTIONS"},
+		{"id": "world_breaker", "label": "WORLD BREAKER   CLEAVE IGNITES A FORWARD DETONATION CHAIN"},
+	]
+	for i in range(_omega_buttons.size()):
+		_omega_buttons[i].text = "%d   %s" % [i + 1, String(_omega_choices[i]["label"])]
+		_omega_buttons[i].disabled = false
+	_omega_overlay.show()
+	_omega_buttons[0].grab_focus()
+	SFX.play_ui(self, "level", -4.0, 0.66)
+	get_tree().paused = true
+
+func _choose_omega_mutation(index: int) -> void:
+	if _omega_overlay == null or not _omega_overlay.visible:
+		return
+	if index < 0 or index >= _omega_choices.size():
+		return
+	var active := mecha_manager.get_active_mecha()
+	if active == null:
+		return
+	var mutation_id := String(_omega_choices[index]["id"])
+	if not active.set_legendary_mutation(mutation_id):
+		return
+	_omega_core_stored = false
+	_omega_overlay.hide()
+	get_tree().paused = false
+	SFX.play_ui(self, "secondary", -4.0, 0.72)
+	_show_banner("LEGENDARY ONLINE   %s" % active.get_legendary_mutation_display_name(), 1.18)
+	_update_hud()
+	call_deferred("_check_level_up")
+
 func _present_upgrade_choices() -> void:
 	var active := mecha_manager.get_active_mecha()
 	if active == null:
@@ -1172,4 +1335,7 @@ func _choose_upgrade(index: int) -> void:
 	_upgrade_overlay.hide()
 	get_tree().paused = false
 	_update_hud()
-	call_deferred("_check_level_up")
+	if _omega_core_stored:
+		call_deferred("_try_open_omega_mutation")
+	else:
+		call_deferred("_check_level_up")

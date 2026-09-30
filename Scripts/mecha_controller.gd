@@ -87,6 +87,7 @@ var impact_scale := 1.0
 var secondary_unlocked := false
 var primary_ability_tier := 0
 var secondary_ability_tier := 0
+var legendary_mutation := ""
 
 var _rng := RandomNumberGenerator.new()
 var _attack_fire_frame := 0
@@ -300,6 +301,30 @@ func get_primary_ability_tier() -> int:
 
 func get_secondary_ability_tier() -> int:
 	return secondary_ability_tier
+
+func can_accept_omega_mutation() -> bool:
+	return mecha_id == "M1" and primary_ability_tier >= MAX_ABILITY_TIER and legendary_mutation.is_empty()
+
+func has_legendary_mutation() -> bool:
+	return not legendary_mutation.is_empty()
+
+func get_legendary_mutation() -> String:
+	return legendary_mutation
+
+func get_legendary_mutation_display_name() -> String:
+	match legendary_mutation:
+		"omega_edge": return "OMEGA EDGE"
+		"atlas_crown": return "ATLAS CROWN"
+		"world_breaker": return "WORLD BREAKER"
+		_: return ""
+
+func set_legendary_mutation(mutation_id: String) -> bool:
+	if not can_accept_omega_mutation():
+		return false
+	if mutation_id not in ["omega_edge", "atlas_crown", "world_breaker"]:
+		return false
+	legendary_mutation = mutation_id
+	return true
 
 func can_upgrade_primary_ability() -> bool:
 	return primary_ability_tier < MAX_ABILITY_TIER
@@ -590,7 +615,7 @@ func _spawn_special_ability(direction: Vector2) -> void:
 	var effect := SpecialAbilityScript.new() as SpacehaulSpecialAbility
 	root.add_child(effect)
 	var muzzle_origin := global_position + Vector2(0.0, -18.0) + direction.normalized() * 8.0
-	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), global_position, _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier)
+	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), global_position, _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier, legendary_mutation)
 
 func _get_attack_target(attack_dir: Vector2) -> Vector2:
 	var joy_id := _first_connected_joypad()

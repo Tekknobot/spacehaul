@@ -23,6 +23,7 @@ var alternate := false
 var impact_scale := 1.0
 var primary_tier := 0
 var secondary_tier := 0
+var legendary_mutation := ""
 var root: Node
 var _rng := RandomNumberGenerator.new()
 
@@ -36,7 +37,8 @@ func setup(
 	use_alternate: bool = false,
 	new_impact_scale: float = 1.0,
 	new_primary_tier: int = 0,
-	new_secondary_tier: int = 0
+	new_secondary_tier: int = 0,
+	new_legendary_mutation: String = ""
 ) -> void:
 	mecha_id = new_mecha_id
 	origin = start_position.round()
@@ -48,6 +50,7 @@ func setup(
 	impact_scale = clampf(new_impact_scale, 0.75, 3.0)
 	primary_tier = clampi(new_primary_tier, 0, 3)
 	secondary_tier = clampi(new_secondary_tier, 0, 3)
+	legendary_mutation = new_legendary_mutation
 	direction = (target - origin).normalized()
 	if direction.length_squared() <= 0.001:
 		direction = Vector2.RIGHT
@@ -942,10 +945,75 @@ func _ability_impact_fx(
 		radius * impact_scale
 	)
 		
+func _m1_legendary_omega_edge(base_direction: Vector2) -> void:
+	# Three over-range cleavers tear through a broad forward fan. This is the
+	# cleanest "more blade" mutation and keeps ATLAS readable in dense swarms.
+	for angle in [-0.30, 0.0, 0.30]:
+		direction = base_direction.rotated(float(angle)).normalized()
+		await _m1_traveling_cleaver_wave(
+			30.0, 205.0, deg_to_rad(31.0), deg_to_rad(52.0), 17, 0.13, 13.0,
+			Color(3.5, 1.25, 3.7, 1.0), Color(1.45, 0.14, 1.8, 0.34)
+		)
+		await _sleep(0.018)
+	direction = base_direction
+	var end := owner_ground + IsoVfx.ground_vector(base_direction, 190.0)
+	_pulse_ring(end, 30.0, Color(3.5, 2.5, 3.8, 1.0), Color(1.4, 0.16, 1.8, 0.25), 0.16, 24)
+	_explode(end, Color(3.4, 1.5, 3.7, 1.0), Color(1.3, 0.12, 1.8, 1.0), 30.0, 30.0)
+
+func _m1_legendary_atlas_crown(base_direction: Vector2) -> void:
+	# Plasma Cleaver becomes an omnidirectional crown. The six blades fire in a
+	# fast clock sequence so every sector around the chassis becomes dangerous.
+	var start_angle := base_direction.angle()
+	_pulse_ring(owner_ground, 38.0, Color(1.7, 3.3, 3.6, 1.0), Color(0.22, 1.0, 1.7, 0.22), 0.18, 30)
+	for i in range(6):
+		direction = Vector2.from_angle(start_angle + TAU * float(i) / 6.0)
+		await _m1_traveling_cleaver_wave(
+			24.0, 164.0, deg_to_rad(25.0), deg_to_rad(40.0), 13, 0.10, 11.5,
+			Color(1.55, 3.25, 3.55, 1.0), Color(0.18, 1.05, 1.75, 0.30)
+		)
+		await _sleep(0.012)
+	direction = base_direction
+	_radial_hit(owner_ground, 104.0, true)
+	_pulse_ring(owner_ground, 106.0, Color(2.2, 3.4, 3.6, 1.0), Color(0.25, 1.0, 1.6, 0.24), 0.20, 36)
+
+func _m1_legendary_world_breaker(base_direction: Vector2) -> void:
+	# One colossal forward rupture. The cleaver opens the lane, then a sequence
+	# of delayed reactor detonations walks away from ATLAS through the horde.
+	direction = base_direction
+	await _m1_traveling_cleaver_wave(
+		34.0, 230.0, deg_to_rad(34.0), deg_to_rad(59.0), 19, 0.20, 15.0,
+		Color(3.6, 2.2, 0.72, 1.0), Color(1.7, 0.42, 0.08, 0.34)
+	)
+	for i in range(6):
+		var distance := 60.0 + float(i) * 34.0
+		var at := (owner_ground + IsoVfx.ground_vector(base_direction, distance)).round()
+		_explode(
+			at,
+			Color(3.6, 1.72 + float(i) * 0.06, 0.52, 1.0),
+			Color(1.7, 0.38, 0.06, 1.0),
+			18.0 + float(i) * 2.2,
+			17.0 + float(i) * 2.0
+		)
+		if i < 5:
+			await _sleep(0.035)
+	var end := (owner_ground + IsoVfx.ground_vector(base_direction, 236.0)).round()
+	_pulse_ring(end, 42.0, Color(3.6, 2.65, 0.9, 1.0), Color(1.8, 0.45, 0.08, 0.28), 0.20, 32)
+
 # M1 PRIMARY: PLASMA CLEAVER
 # A travelling isometric plasma crescent that cuts forward through crowds.
 func _m1_plasma_cleaver() -> void:
 	var tier := primary_tier
+	var base_direction := direction
+	match legendary_mutation:
+		"omega_edge":
+			await _m1_legendary_omega_edge(base_direction)
+			return
+		"atlas_crown":
+			await _m1_legendary_atlas_crown(base_direction)
+			return
+		"world_breaker":
+			await _m1_legendary_world_breaker(base_direction)
+			return
 
 	# Start almost directly in front of Atlas instead of spawning the blade
 	# at its maximum range.

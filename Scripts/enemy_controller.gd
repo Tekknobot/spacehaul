@@ -1,7 +1,7 @@
 extends CharacterBody2D
 class_name SpacehaulEnemy
 
-signal defeated(salvage_value: int)
+signal defeated(salvage_value: int, was_elite: bool, death_position: Vector2)
 
 const EnemyProjectileScript = preload("res://Scripts/enemy_projectile.gd")
 const SalvagePickupScript = preload("res://Scripts/salvage_pickup.gd")
@@ -478,7 +478,7 @@ func _die() -> void:
 	animated_sprite.modulate = Color.WHITE
 	_spawn_salvage()
 	SFX.play(get_tree().current_scene, "enemy_die", -22.0, _rng.randf_range(0.90, 1.08))
-	defeated.emit(salvage_value)
+	defeated.emit(salvage_value, elite, global_position)
 	_start_pixel_dissolve()
 
 func _start_pixel_dissolve() -> void:

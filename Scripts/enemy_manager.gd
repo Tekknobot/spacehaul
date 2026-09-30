@@ -4,6 +4,7 @@ class_name SpacehaulEnemyManager
 const ENEMY_SCENE = preload("res://Scenes/enemy.tscn")
 const BROODMOTHER_SCENE = preload("res://Scenes/broodmother.tscn")
 const SFX = preload("res://Scripts/sound_fx.gd")
+const OMEGA_CORE_SCRIPT = preload("res://Scripts/omega_core_pickup.gd")
 
 const BROODMOTHER_TRIGGER_TIME := 8.0 * 60.0 + 10.0
 const RUN_DURATION := 20.0 * 60.0
@@ -16,6 +17,11 @@ const RUN_DURATION := 20.0 * 60.0
 @export var announce_major_swarms := true
 @export_range(64, 128, 1) var hard_active_enemy_cap := 96
 
+@export_category("Omega Core")
+@export var omega_core_drops_enabled := true
+@export_range(120.0, 600.0, 15.0) var first_omega_core_time := 270.0
+@export_range(180.0, 600.0, 15.0) var omega_core_interval := 330.0
+
 @onready var deck: ProceduralDeck = get_node(deck_path) as ProceduralDeck
 
 var enemies: Array[SpacehaulEnemy] = []
@@ -27,6 +33,7 @@ var _spawning_enabled := true
 var _next_elite_time := 180.0
 var _broodmother_spawned := false
 var _broodmother: SpacehaulBroodmother
+var _next_omega_core_time := 270.0
 
 # Encounter-director state. Ordinary population refill happens in same-species
 # packs; the event layer periodically creates a more legible swarm from one,
@@ -48,6 +55,7 @@ func _ready() -> void:
 	_deck_grace = opening_grace_seconds
 	_spawn_timer = 0.8
 	_next_swarm_time = 52.0
+	_next_omega_core_time = first_omega_core_time
 
 func _process(delta: float) -> void:
 	_cleanup_dead_references()
@@ -79,6 +87,7 @@ func _process(delta: float) -> void:
 func reset_run() -> void:
 	total_kills = 0
 	_next_elite_time = 180.0
+	_next_omega_core_time = first_omega_core_time
 	_spawning_enabled = true
 	_broodmother_spawned = false
 	_clear_boss_encounter()
@@ -126,7 +135,7 @@ func _clear_population() -> void:
 			enemy.queue_free()
 	enemies.clear()
 	for child in get_children():
-		if child.is_in_group("salvage_pickups"):
+		if child.is_in_group("salvage_pickups") or child.is_in_group("omega_core_pickups"):
 			child.queue_free()
 
 func _clear_boss_encounter() -> void:
@@ -522,7 +531,13 @@ func spawn_brood_hatchling(world_position: Vector2, boss_phase: int) -> void:
 
 func _on_broodmother_defeated() -> void:
 	total_kills += 1
+	var boss_position := Vector2.ZERO
+	if _broodmother != null and is_instance_valid(_broodmother):
+		boss_position = _broodmother.global_position
 	_broodmother = null
+	if boss_position != Vector2.ZERO and _omega_drop_is_useful():
+		_spawn_omega_core(boss_position)
+		_next_omega_core_time = _get_run_time() + omega_core_interval
 	_spawn_timer = 1.25
 	_deck_grace = 2.0
 	_next_swarm_time = maxf(_next_swarm_time, _get_run_time() + 12.0)
@@ -607,8 +622,35 @@ func _spawn_interval(run_time: float) -> float:
 		interval += 0.55
 	return clampf(interval, 0.62, 2.15)
 
-func _on_enemy_defeated(_salvage_value: int) -> void:
+func _on_enemy_defeated(_salvage_value: int, was_elite: bool, death_position: Vector2) -> void:
 	total_kills += 1
+	if not was_elite or not omega_core_drops_enabled:
+		return
+	var run_time := _get_run_time()
+	if run_time < _next_omega_core_time:
+		return
+	if not _omega_drop_is_useful():
+		return
+	_spawn_omega_core(death_position)
+	_next_omega_core_time = run_time + omega_core_interval
+
+func _omega_drop_is_useful() -> bool:
+	var managers := get_tree().get_nodes_in_group("survival_manager")
+	if managers.is_empty():
+		return false
+	if managers[0].has_method("can_receive_omega_core"):
+		return bool(managers[0].call("can_receive_omega_core"))
+	return false
+
+func _spawn_omega_core(world_position: Vector2) -> void:
+	var core := OMEGA_CORE_SCRIPT.new() as SpaceMechaOmegaCorePickup
+	if core == null:
+		return
+	add_child(core)
+	core.setup(world_position + Vector2(0.0, -7.0))
+	var managers := get_tree().get_nodes_in_group("survival_manager")
+	if not managers.is_empty() and managers[0].has_method("_show_banner"):
+		managers[0].call("_show_banner", "OMEGA SIGNATURE DETECTED", 0.82)
 
 func _get_run_time() -> float:
 	var managers := get_tree().get_nodes_in_group("survival_manager")
