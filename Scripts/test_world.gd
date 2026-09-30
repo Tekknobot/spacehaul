@@ -20,7 +20,7 @@ const SECONDARY_UNLOCK_TIME := 60.0
 # when recording the Tier III signature attack before its Legendary mutation.
 @export var video_capture_include_omega := true
 @export_range(0, 2, 1) var video_capture_omega_choice := 0
-@export_range(5.0, 15.0, 0.5) var video_capture_omega_minute := 8.0
+@export_range(1.0, 15.0, 0.5) var video_capture_omega_minute := 3.0
 
 @onready var deck: ProceduralDeck = $ProceduralDeck
 @onready var mecha_manager: MechaManager = $MechaManager
@@ -229,7 +229,7 @@ func can_receive_omega_core() -> bool:
 	var active := mecha_manager.get_active_mecha()
 	if active == null:
 		return false
-	return not active.has_legendary_mutation() and active.has_omega_mutations()
+	return active.can_accept_omega_mutation()
 
 func is_omega_seek_active() -> bool:
 	if _game_over or _run_complete or _omega_core_stored or _menu_open:
@@ -258,7 +258,8 @@ func _try_open_omega_mutation() -> void:
 	if active == null:
 		return
 	if not active.can_accept_omega_mutation():
-		_show_banner("OMEGA CORE STORED\nMAX %s TO MUTATE" % active.get_omega_signature_name(), 0.95)
+		_omega_core_stored = false
+		_show_banner("OMEGA ARSENAL COMPLETE", 0.95)
 		return
 	_present_omega_choices()
 
@@ -934,19 +935,28 @@ func _apply_video_capture_generic_upgrade(active: MechaController, choice_id: St
 			_salvage_magnet_radius = minf(220.0, _salvage_magnet_radius * 1.20)
 
 func _apply_video_capture_omega(active: MechaController, capture_minutes: float) -> void:
-	if not video_capture_include_omega:
+	if not video_capture_include_omega or capture_minutes < video_capture_omega_minute:
 		return
-	if capture_minutes < video_capture_omega_minute:
-		return
-	if not active.can_accept_omega_mutation():
-		return
-	var choices: Array = active.get_omega_mutation_choices()
-	if choices.is_empty():
-		return
-	var choice_index := clampi(video_capture_omega_choice, 0, choices.size() - 1)
-	var mutation_id := String(choices[choice_index].get("id", ""))
-	if not mutation_id.is_empty():
-		active.set_legendary_mutation(mutation_id)
+
+	# Mirror the live three-Core progression in staged footage. With the default
+	# 03:00 start and 3-minute spacing, captures at 3/6/9+ minutes own 1/2/3 Omegas.
+	var target_count := clampi(
+		1 + int(floor((capture_minutes - video_capture_omega_minute) / 3.0)),
+		1,
+		active.get_omega_mutation_capacity()
+	)
+	var granted := 0
+	while granted < target_count and active.can_accept_omega_mutation():
+		var choices: Array = active.get_omega_mutation_choices()
+		if choices.is_empty():
+			break
+		var choice_index := 0
+		if granted == 0:
+			choice_index = clampi(video_capture_omega_choice, 0, choices.size() - 1)
+		var mutation_id := String(choices[choice_index].get("id", ""))
+		if mutation_id.is_empty() or not active.set_legendary_mutation(mutation_id):
+			break
+		granted += 1
 
 func _on_deck_regenerated(_new_spawn: Vector2, new_seed: int) -> void:
 	mecha_manager.relocate_after_deck_regeneration()
@@ -1108,16 +1118,17 @@ func _update_hud() -> void:
 		_salvage,
 		_salvage_required
 	]
+	var omega_count := active.get_omega_mutation_count()
+	var omega_capacity := active.get_omega_mutation_capacity()
 	if active.has_legendary_mutation():
 		if active.is_omega_primary_selected():
-			_hud_omega.text = "OMEGA %s" % active.get_legendary_mutation_hud_name()
+			_hud_omega.text = "OMEGA %d/%d %s" % [omega_count, omega_capacity, active.get_legendary_mutation_hud_name()]
 		else:
-			_hud_omega.text = "OMEGA NORM"
+			_hud_omega.text = "OMEGA %d/%d NORM" % [omega_count, omega_capacity]
 	elif _omega_core_stored:
-		_hud_omega.text = "OMEGA HELD"
-	elif active.get_primary_ability_tier() >= 3 and active.has_omega_mutations():
-		# Tier III means this chassis is eligible for a Core; it does not mean a Core has dropped.
-		_hud_omega.text = "OMEGA SEEK"
+		_hud_omega.text = "OMEGA CORE"
+	elif active.has_omega_mutations():
+		_hud_omega.text = "OMEGA %d/%d" % [omega_count, omega_capacity]
 	else:
 		_hud_omega.text = "OMEGA --"
 	_hud_time.text = _format_time(_run_time)
@@ -1278,7 +1289,7 @@ func _build_compact_hud() -> void:
 	_hud_level = _make_stat_cell(row, Color(0.80, 0.62, 1.0, 1.0))
 	_hud_salvage = _make_stat_cell(row, Color(1.0, 0.80, 0.38, 1.0))
 	_hud_omega = _make_stat_cell(row, Color(0.96, 0.44, 1.0, 1.0))
-	_hud_omega.add_theme_font_size_override("font_size", 13)
+	_hud_omega.add_theme_font_size_override("font_size", 10)
 	_hud_time = _make_stat_cell(row, Color(0.72, 0.88, 0.96, 1.0))
 	_hud_deck = _make_stat_cell(row, Color(0.47, 0.76, 1.0, 1.0))
 	_hud_hostiles = _make_stat_cell(row, Color(1.0, 0.48, 0.34, 1.0))
@@ -1306,7 +1317,7 @@ func _make_stat_cell(row: HBoxContainer, color: Color) -> Label:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	label.add_theme_font_size_override("font_size", 13)
+	label.add_theme_font_size_override("font_size", 10)
 	label.add_theme_color_override("font_color", color)
 	panel.add_child(label)
 	return label
@@ -1635,25 +1646,34 @@ func _present_omega_choices() -> void:
 		return
 
 	_omega_choices.assign(active.get_omega_mutation_choices())
-
 	if _omega_choices.is_empty():
 		return
 
-	_omega_title.text = "OMEGA MUTATION   %s" % active.get_display_name()
+	var acquired := active.get_omega_mutation_count()
+	var capacity := active.get_omega_mutation_capacity()
+	_omega_title.text = "OMEGA CORE %d/%d   %s" % [acquired + 1, capacity, active.get_display_name()]
 
 	if _omega_hint != null:
-		_omega_hint.text = "%s // SELECT ONE LEGENDARY EVOLUTION   1  2  3" % active.get_omega_signature_name()
+		var key_hint := ""
+		for i in range(_omega_choices.size()):
+			if not key_hint.is_empty():
+				key_hint += "  "
+			key_hint += str(i + 1)
+		_omega_hint.text = "%s // SELECT FROM %d REMAINING   %s" % [
+			active.get_omega_signature_name(),
+			_omega_choices.size(),
+			key_hint
+		]
 
 	for i in range(_omega_buttons.size()):
-		if i < _omega_choices.size():
+		var available := i < _omega_choices.size()
+		_omega_buttons[i].visible = available
+		_omega_buttons[i].disabled = not available
+		if available:
 			_omega_buttons[i].text = "%d   %s" % [
 				i + 1,
 				String(_omega_choices[i].get("label", "OMEGA MUTATION"))
 			]
-			_omega_buttons[i].disabled = false
-		else:
-			_omega_buttons[i].text = "%d   --" % [i + 1]
-			_omega_buttons[i].disabled = true
 
 	if _omega_guide != null:
 		_omega_guide.visible = false
@@ -1677,7 +1697,13 @@ func _choose_omega_mutation(index: int) -> void:
 	_omega_overlay.hide()
 	get_tree().paused = false
 	SFX.play_ui(self, "secondary", -4.0, 0.72)
-	_show_banner("LEGENDARY ONLINE   %s\nMOUSE WHEEL   SWITCH LMB / OMEGA" % active.get_legendary_mutation_display_name(), 1.35)
+
+	var acquired := active.get_omega_mutation_count()
+	var capacity := active.get_omega_mutation_capacity()
+	var status := "OMEGA ACQUIRED %d/%d   %s" % [acquired, capacity, active.get_legendary_mutation_display_name()]
+	if active.has_all_omega_mutations():
+		status = "OMEGA ARSENAL COMPLETE   %s" % active.get_legendary_mutation_display_name()
+	_show_banner("%s\nMOUSE WHEEL   CYCLE STANDARD / OMEGA" % status, 1.35)
 	_update_hud()
 	call_deferred("_check_level_up")
 

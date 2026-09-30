@@ -19,8 +19,8 @@ const RUN_DURATION := 20.0 * 60.0
 
 @export_category("Omega Core")
 @export var omega_core_drops_enabled := true
-@export_range(120.0, 600.0, 15.0) var first_omega_core_time := 270.0
-@export_range(180.0, 600.0, 15.0) var omega_core_interval := 330.0
+@export_range(90.0, 600.0, 15.0) var first_omega_core_time := 180.0
+@export_range(120.0, 600.0, 15.0) var omega_core_interval := 180.0
 @export_range(0.5, 5.0, 0.25) var omega_carrier_spawn_delay := 1.5
 @export_range(1.10, 1.75, 0.05) var omega_carrier_health_multiplier := 1.35
 
@@ -35,7 +35,7 @@ var _spawning_enabled := true
 var _next_elite_time := 180.0
 var _broodmother_spawned := false
 var _broodmother: SpacehaulBroodmother
-var _next_omega_core_time := 270.0
+var _next_omega_core_time := 180.0
 var _omega_carrier: SpacehaulEnemy
 var _omega_carrier_pending := false
 var _omega_carrier_timer := 0.0
@@ -126,6 +126,7 @@ func prepare_video_capture_state(run_time: float) -> void:
 	_spawn_timer = 0.0
 	_broodmother_spawned = run_time >= BROODMOTHER_TRIGGER_TIME
 	_next_swarm_time = run_time + 8.0
+	_next_omega_core_time = run_time + omega_core_interval
 
 	if run_time < 180.0:
 		_next_elite_time = 180.0
@@ -643,7 +644,16 @@ func _on_broodmother_defeated() -> void:
 	if _broodmother != null and is_instance_valid(_broodmother):
 		boss_position = _broodmother.global_position
 	_broodmother = null
-	if boss_position != Vector2.ZERO and not _omega_core_in_world and _omega_carrier == null and _omega_seek_is_active():
+	# The boss may satisfy a Core hunt only when the next scheduled OMEGA window is
+	# already live. This prevents the Broodmother from accidentally granting the
+	# third Core early simply because the player killed it before ~09:00.
+	if (
+		boss_position != Vector2.ZERO
+		and _get_run_time() >= _next_omega_core_time
+		and not _omega_core_in_world
+		and _omega_carrier == null
+		and _omega_seek_is_active()
+	):
 		_spawn_omega_core(boss_position)
 	_spawn_timer = 1.25
 	_deck_grace = 2.0
@@ -762,6 +772,9 @@ func notify_omega_core_collected() -> void:
 	_omega_core_in_world = false
 	_omega_carrier_pending = false
 	_omega_carrier_timer = 0.0
+	# Each collected Core arms the next hunt rather than permanently exhausting
+	# the director. Default pacing is roughly 03:00, 06:00 and 09:00.
+	_next_omega_core_time = _get_run_time() + omega_core_interval
 
 func get_omega_guidance_target() -> Node2D:
 	if _omega_carrier != null and is_instance_valid(_omega_carrier) and not _omega_carrier.is_queued_for_deletion():

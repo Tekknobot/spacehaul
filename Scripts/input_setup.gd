@@ -11,7 +11,8 @@ static func ensure_actions() -> void:
 	_add_action("aim", 0.15)
 	_add_action("shoot", 0.15)
 	_add_action("secondary_ability", 0.15)
-	_add_action("toggle_omega_primary")
+	_add_action("cycle_omega_primary_next")
+	_add_action("cycle_omega_primary_prev")
 	_add_action("interact")
 	_add_action("tool")
 	_add_action("pickup")
@@ -54,10 +55,10 @@ static func ensure_actions() -> void:
 	_add_mouse_button("secondary_ability", MOUSE_BUTTON_RIGHT)
 	_add_joy_axis("secondary_ability", JOY_AXIS_TRIGGER_LEFT, 1.0)
 
-	# Once a Legendary mutation has been acquired, either mouse-wheel direction
-	# toggles LMB between the familiar Tier III signature and its Omega form.
-	_add_mouse_button("toggle_omega_primary", MOUSE_BUTTON_WHEEL_UP)
-	_add_mouse_button("toggle_omega_primary", MOUSE_BUTTON_WHEEL_DOWN)
+	# OMEGA loadout cycling. STANDARD remains slot zero; successive Core pickups
+	# add up to three OMEGA primaries to the wheel in acquisition order.
+	_add_mouse_button("cycle_omega_primary_next", MOUSE_BUTTON_WHEEL_DOWN)
+	_add_mouse_button("cycle_omega_primary_prev", MOUSE_BUTTON_WHEEL_UP)
 
 	_add_key("interact", KEY_E)
 	_add_joy_button("interact", JOY_BUTTON_X)

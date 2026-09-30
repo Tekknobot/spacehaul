@@ -11,6 +11,14 @@ const SFX = preload("res://Scripts/sound_fx.gd")
 
 const GAMEPAD_AIM_DEADZONE := 0.28
 
+# LMB aim assist keeps mouse / right-stick direction authoritative, but acquires a
+# living enemy inside a forward cone before the primary ability is spawned. The
+# cone opens slightly as the arena fills, so late-run swarms do not demand
+# pixel-perfect cursor placement while the player is also dodging and moving.
+const PRIMARY_AIM_ASSIST_MIN_RANGE := 48.0
+const PRIMARY_AIM_ASSIST_MAX_SWARM_BONUS_DEGREES := 18.0
+const PRIMARY_AIM_ASSIST_SWARM_START := 10
+
 
 const MECHA_DISPLAY_NAMES := {
 	"M1": "ATLAS",
@@ -146,6 +154,7 @@ var secondary_unlocked := false
 var primary_ability_tier := 0
 var secondary_ability_tier := 0
 var legendary_mutation := ""
+var acquired_omega_mutations: Array[String] = []
 var omega_primary_selected := false
 
 var _rng := RandomNumberGenerator.new()
@@ -365,18 +374,42 @@ func has_omega_mutations() -> bool:
 	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
 	return not choices.is_empty()
 
+func get_omega_mutation_capacity() -> int:
+	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
+	return choices.size()
+
+func get_omega_mutation_count() -> int:
+	return acquired_omega_mutations.size()
+
+func get_acquired_omega_mutations() -> Array[String]:
+	return acquired_omega_mutations.duplicate()
+
+func has_all_omega_mutations() -> bool:
+	return has_omega_mutations() and get_omega_mutation_count() >= get_omega_mutation_capacity()
+
 func can_accept_omega_mutation() -> bool:
-	return primary_ability_tier >= MAX_ABILITY_TIER and legendary_mutation.is_empty() and has_omega_mutations()
+	# OMEGA is now a three-stage run progression rather than a one-time capstone.
+	# Cores may appear before the standard primary is Tier III; the familiar primary
+	# remains available as the STANDARD wheel slot and can continue upgrading normally.
+	return has_omega_mutations() and not has_all_omega_mutations()
 
 func get_omega_signature_name() -> String:
 	return get_primary_ability_name()
 
 func get_omega_mutation_choices() -> Array:
+	# Only unclaimed mutations are offered. The OMEGA panel therefore naturally
+	# shrinks from 3 choices, to 2, to the final 1 on successive Core pickups.
+	var remaining: Array = []
 	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
-	return choices.duplicate(true)
+	for choice in choices:
+		var mutation_id := String(choice.get("id", ""))
+		if mutation_id.is_empty() or mutation_id in acquired_omega_mutations:
+			continue
+		remaining.append(choice.duplicate(true))
+	return remaining
 
 func has_legendary_mutation() -> bool:
-	return not legendary_mutation.is_empty()
+	return not acquired_omega_mutations.is_empty()
 
 func get_legendary_mutation() -> String:
 	return legendary_mutation
@@ -396,32 +429,55 @@ func get_legendary_mutation_hud_name() -> String:
 	return "ON"
 
 func set_legendary_mutation(mutation_id: String) -> bool:
-	if not can_accept_omega_mutation():
+	if not can_accept_omega_mutation() or mutation_id in acquired_omega_mutations:
 		return false
 	var choices: Array = OMEGA_MUTATIONS.get(mecha_id, [])
 	for choice in choices:
 		if String(choice.get("id", "")) == mutation_id:
+			acquired_omega_mutations.append(mutation_id)
 			legendary_mutation = mutation_id
-			# Newly acquired Legendaries start active so the player immediately
-			# experiences the mutation. Mouse wheel can then return to standard LMB.
+			# A newly collected mutation becomes active immediately so the pickup has an
+			# obvious payoff. The wheel can always return to STANDARD afterwards.
 			omega_primary_selected = true
 			return true
 	return false
 
 func is_omega_primary_selected() -> bool:
-	return has_legendary_mutation() and omega_primary_selected
+	return has_legendary_mutation() and omega_primary_selected and legendary_mutation in acquired_omega_mutations
 
 func get_primary_attack_mutation() -> String:
 	if is_omega_primary_selected():
 		return legendary_mutation
 	return ""
 
-func toggle_omega_primary_mode() -> bool:
-	if not has_legendary_mutation():
+func cycle_omega_primary_mode(step: int) -> bool:
+	if acquired_omega_mutations.is_empty() or step == 0:
 		return false
-	omega_primary_selected = not omega_primary_selected
-	omega_primary_mode_changed.emit(omega_primary_selected, get_legendary_mutation_display_name())
+
+	# Slot 0 is always the standard primary. Slots 1..N are the OMEGA mutations in
+	# acquisition order. This preserves the weapon the player built while letting
+	# the mouse wheel grow naturally from 2 states to 3, then 4.
+	var current_slot := 0
+	if is_omega_primary_selected():
+		var current_index := acquired_omega_mutations.find(legendary_mutation)
+		if current_index >= 0:
+			current_slot = current_index + 1
+
+	var state_count := acquired_omega_mutations.size() + 1
+	var next_slot := posmod(current_slot + step, state_count)
+	if next_slot == 0:
+		omega_primary_selected = false
+		omega_primary_mode_changed.emit(false, get_primary_ability_name())
+		return true
+
+	legendary_mutation = acquired_omega_mutations[next_slot - 1]
+	omega_primary_selected = true
+	omega_primary_mode_changed.emit(true, get_legendary_mutation_display_name())
 	return true
+
+func toggle_omega_primary_mode() -> bool:
+	# Backward-compatible helper for any older call sites: advance one wheel slot.
+	return cycle_omega_primary_mode(1)
 
 func can_upgrade_primary_ability() -> bool:
 	return primary_ability_tier < MAX_ABILITY_TIER
@@ -525,10 +581,12 @@ func _process_player(delta: float) -> void:
 	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attack_direction := _get_attack_direction()
 
-	# Legendary mutations no longer delete the weapon the player built all run.
-	# Either mouse-wheel direction toggles LMB between Tier III standard and Omega.
-	if Input.is_action_just_pressed("toggle_omega_primary"):
-		toggle_omega_primary_mode()
+	# OMEGA is a growing primary loadout. Wheel down advances through STANDARD and
+	# every acquired mutation; wheel up walks the same list in reverse.
+	if Input.is_action_just_pressed("cycle_omega_primary_next"):
+		cycle_omega_primary_mode(1)
+	elif Input.is_action_just_pressed("cycle_omega_primary_prev"):
+		cycle_omega_primary_mode(-1)
 
 	if Input.is_action_just_pressed("dash") and _boost_cooldown_left <= 0.0:
 		_start_boost(move_input, attack_direction)
@@ -536,10 +594,18 @@ func _process_player(delta: float) -> void:
 	if _boost_time <= 0.0 and not attacking:
 		# Primary remains hold-to-fire, but firing no longer roots the chassis.
 		if Input.is_action_pressed("shoot") and _primary_cooldown_left <= 0.0:
-			_attack_target = _get_attack_target(attack_direction)
+			var raw_primary_target := _get_attack_target(attack_direction)
+			_attack_target = _get_primary_assisted_target(raw_primary_target, attack_direction)
 			_attack_alternate = false
 			_primary_cooldown_left = _primary_cooldown
-			_start_attack(attack_direction, true)
+
+			# Face / launch toward the acquired enemy as well as passing its position
+			# into the ability. Directional primaries therefore gain the same assist
+			# as point-targeted weapons without changing their authored geometry.
+			var assisted_direction := _attack_target - (global_position + Vector2(0.0, -18.0))
+			if assisted_direction.length_squared() <= 0.001:
+				assisted_direction = attack_direction
+			_start_attack(assisted_direction.normalized(), true)
 		elif Input.is_action_just_pressed("secondary_ability") and is_secondary_unlocked() and _secondary_cooldown_left <= 0.0:
 			_attack_target = _get_attack_target(attack_direction)
 			_attack_alternate = true
@@ -721,6 +787,102 @@ func _spawn_special_ability(direction: Vector2) -> void:
 	# mutation only while the player has explicitly selected Omega mode.
 	var active_primary_mutation := "" if _attack_alternate else get_primary_attack_mutation()
 	effect.setup(mecha_id, muzzle_origin, global_position + Vector2(0.0, -18.0), global_position, _attack_target, get_rid(), _attack_alternate, impact_scale, primary_ability_tier, secondary_ability_tier, active_primary_mutation)
+
+func _primary_aim_assist_profile() -> Dictionary:
+	# Range follows each chassis' practical Tier III / Omega primary footprint.
+	# Narrow precision weapons get a slightly tighter cone; crowd-control and
+	# projectile weapons get more forgiveness because their identity already
+	# favors acquiring targets rather than tracing a perfect cursor line.
+	match mecha_id:
+		"M1": return {"range": 210.0, "cone": 48.0}
+		"M2": return {"range": 220.0, "cone": 40.0}
+		"M3": return {"range": 305.0, "cone": 52.0}
+		"R1": return {"range": 290.0, "cone": 36.0}
+		"R2": return {"range": 340.0, "cone": 32.0}
+		"R3": return {"range": 330.0, "cone": 58.0}
+		"R4": return {"range": 280.0, "cone": 62.0}
+		"S1": return {"range": 275.0, "cone": 38.0}
+		"S2": return {"range": 295.0, "cone": 54.0}
+		"S3": return {"range": 255.0, "cone": 46.0}
+		_: return {"range": 260.0, "cone": 44.0}
+
+
+func _get_primary_assisted_target(raw_target: Vector2, fallback_direction: Vector2) -> Vector2:
+	if get_tree() == null:
+		return raw_target
+
+	var aim_origin := global_position + Vector2(0.0, -18.0)
+	var aim_vector := raw_target - aim_origin
+	if aim_vector.length_squared() <= 0.001:
+		aim_vector = fallback_direction
+	if aim_vector.length_squared() <= 0.001:
+		aim_vector = last_move_direction
+	if aim_vector.length_squared() <= 0.001:
+		aim_vector = Vector2.RIGHT
+	var aim_dir := aim_vector.normalized()
+
+	var profile := _primary_aim_assist_profile()
+	var max_range := maxf(PRIMARY_AIM_ASSIST_MIN_RANGE, float(profile.get("range", 260.0)))
+	var base_cone_degrees := float(profile.get("cone", 44.0))
+
+	# Count only live / active enemy nodes. The extra cone is intentionally small
+	# early and reaches its cap only when the battlefield is crowded.
+	var live_enemies: Array[Node2D] = []
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var enemy := node as Node2D
+		if enemy == null or not is_instance_valid(enemy) or not enemy.is_inside_tree():
+			continue
+		var collision_object := enemy as CollisionObject2D
+		if collision_object != null and collision_object.collision_layer == 0:
+			continue
+		live_enemies.append(enemy)
+
+	if live_enemies.is_empty():
+		return raw_target
+
+	var swarm_extra := clampf(
+		float(maxi(0, live_enemies.size() - PRIMARY_AIM_ASSIST_SWARM_START)) * 1.5,
+		0.0,
+		PRIMARY_AIM_ASSIST_MAX_SWARM_BONUS_DEGREES
+	)
+	var normal_cone := deg_to_rad(base_cone_degrees + swarm_extra)
+	var close_cone := deg_to_rad(minf(82.0, base_cone_degrees + swarm_extra + 20.0))
+	var close_range := minf(112.0, max_range * 0.48)
+
+	var best_enemy: Node2D = null
+	var best_score := INF
+	var raw_distance := clampf(aim_origin.distance_to(raw_target), PRIMARY_AIM_ASSIST_MIN_RANGE, max_range)
+
+	for enemy in live_enemies:
+		var to_enemy := enemy.global_position - aim_origin
+		var enemy_distance := to_enemy.length()
+		if enemy_distance < 1.0 or enemy_distance > max_range:
+			continue
+
+		var enemy_dir := to_enemy / enemy_distance
+		var angle := absf(aim_dir.angle_to(enemy_dir))
+		var allowed_cone := close_cone if enemy_distance <= close_range else normal_cone
+		if angle > allowed_cone:
+			continue
+
+		# Alignment dominates the score. Cursor proximity then distinguishes enemies
+		# along the same lane, while a light owner-distance bias avoids snapping past
+		# a nearby threat to a farther target with almost identical alignment.
+		var angle_score := (angle / maxf(allowed_cone, 0.001)) * 100.0
+		var cursor_score := enemy.global_position.distance_to(raw_target) * 0.16
+		var range_score := absf(enemy_distance - raw_distance) * 0.05
+		var proximity_score := enemy_distance * 0.025
+		var score := angle_score + cursor_score + range_score + proximity_score
+
+		if score < best_score:
+			best_score = score
+			best_enemy = enemy
+
+	if best_enemy != null:
+		return best_enemy.global_position.round()
+
+	return raw_target
+
 
 func _get_attack_target(attack_dir: Vector2) -> Vector2:
 	var joy_id := _first_connected_joypad()
