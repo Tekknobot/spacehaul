@@ -1855,39 +1855,124 @@ func _r1_legendary_refraction_engine(base_direction: Vector2) -> void:
 		40
 	)
 
-# R2 BREACHER // BREACH CANNON
+# R2 BREACHER // KINETIC PRESSURE RAM
+# Mutation IDs remain unchanged for save/upgrade compatibility. BREACHER's
+# legendary primaries now amplify its moving pressure-wall language rather than
+# returning to long rails or fracture lines.
 func _r2_legendary_rail_annihilator(base_direction: Vector2) -> void:
-	var end := (origin + IsoVfx.ground_vector(base_direction, 330.0)).round()
-	var rail := _line(origin, end, Color(3.7, 2.35, 0.82, 1.0), Color(1.9, 0.5, 0.08, 0.34))
-	_damage_line(origin, end, 11.0)
-	_fade_free(rail, 0.28)
-	for i in range(8):
-		var at := origin.lerp(end, float(i + 1) / 8.0).round()
-		_explode(at, Color(3.6, 1.7, 0.40, 1.0), Color(1.8, 0.42, 0.07, 1.0), 16.0 + float(i) * 1.4, 14.0)
-		await _sleep(0.022)
+	var aim := _target_clamped(330.0)
+	var enemy := _nearest_enemy_to_aim(aim, 105.0, 342.0)
+	var end := enemy.global_position.round() if enemy != null else aim
+
+	await _r2_pressure_ram_at(
+		end,
+		3,
+		true,
+		7
+	)
+
+	_pulse_ring(
+		end,
+		48.0,
+		Color(3.75, 2.45, 0.88, 1.0),
+		Color(1.9, 0.52, 0.08, 0.24),
+		0.18,
+		30
+	)
+
 
 func _r2_legendary_breach_trident(base_direction: Vector2) -> void:
-	for angle in [-0.18, 0.0, 0.18]:
-		var aim := base_direction.rotated(float(angle)).normalized()
-		var end := (origin + IsoVfx.ground_vector(aim, 286.0)).round()
-		var rail := _line(origin, end, Color(3.55, 2.1, 0.70, 1.0), Color(1.8, 0.45, 0.08, 0.30))
-		_damage_line(origin, end, 8.0)
-		_explode(end, Color(3.5, 1.6, 0.38, 1.0), Color(1.75, 0.4, 0.07, 1.0), 29.0, 28.0)
-		_fade_free(rail, 0.20)
-		await _sleep(0.035)
+	# Three independent pressure rams acquire different victims around the aim
+	# point. The broad spacing retains the mutation's "trident" coverage without
+	# drawing three flat rails from the chassis.
+	var center := _target_clamped(292.0)
+	var used_ids: Dictionary = {}
+
+	for slot_index in range(3):
+		var slot_offset := (
+			float(slot_index) - 1.0
+		) * 58.0
+
+		var fallback := (
+			center
+			+ IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				slot_offset
+			)
+		).round()
+
+		var enemy := _nearest_unused_enemy(
+			fallback,
+			78.0,
+			308.0,
+			used_ids
+		)
+
+		var end := fallback
+
+		if enemy != null:
+			used_ids[enemy.get_instance_id()] = true
+			end = enemy.global_position.round()
+
+		await _r2_pressure_ram_at(
+			end,
+			3,
+			slot_index == 1,
+			4
+		)
+
+		await _sleep(0.018)
+
 
 func _r2_legendary_fault_engine(base_direction: Vector2) -> void:
-	var cursor := origin.round()
-	for i in range(8):
-		var distance := 34.0 * float(i + 1)
-		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, (18.0 if i % 2 == 0 else -18.0) + sin(float(i)) * 5.0)
-		var next := (origin + IsoVfx.ground_vector(base_direction, distance) + lateral).round()
-		var fault := _line(cursor, next, Color(3.45, 1.85, 0.55, 0.96), Color(1.75, 0.42, 0.07, 0.22))
-		_damage_line(cursor, next, 7.0)
-		_explode(next, Color(3.4, 1.5, 0.34, 1.0), Color(1.7, 0.38, 0.06, 1.0), 15.0 + float(i), 14.0)
-		_fade_free(fault, 0.16)
-		cursor = next
-		await _sleep(0.028)
+	# Fault Engine now snaps a sequence of short-lived vertical compression
+	# bulkheads into the aimed combat zone. It feels like the deck is being
+	# mechanically sectioned off instead of traced with a zig-zag line.
+	var center := _target_clamped(292.0)
+	var used_ids: Dictionary = {}
+
+	for stage in range(8):
+		var lane := -1.0 if stage % 2 == 0 else 1.0
+		var forward_offset := (
+			float(stage) - 3.5
+		) * 14.0
+		var lateral_offset := lane * (
+			24.0 + float(stage % 3) * 7.0
+		)
+
+		var fallback := (
+			center
+			+ IsoVfx.ground_vector(
+				base_direction,
+				forward_offset
+			)
+			+ IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				lateral_offset
+			)
+		).round()
+
+		var enemy := _nearest_unused_enemy(
+			fallback,
+			72.0,
+			312.0,
+			used_ids
+		)
+
+		var crush_at := fallback
+
+		if enemy != null:
+			used_ids[enemy.get_instance_id()] = true
+			crush_at = enemy.global_position.round()
+
+		await _r2_fault_bulkhead_at(
+			crush_at,
+			base_direction,
+			3,
+			stage
+		)
+
+		await _sleep(0.018)
 
 # R3 HUNTER // HUNTER MISSILES
 func _omega_hunter_fill_pack(count: int, max_range: float, destinations: Array[Vector2], tracking_ids: Array[int]) -> void:
@@ -1986,40 +2071,155 @@ func _r4_legendary_neural_overload(base_direction: Vector2) -> void:
 			_explode(chain[i], Color(3.1, 1.55, 3.7, 1.0), Color(1.2, 0.28, 1.95, 1.0), 14.0 + float(pass_index) * 3.0, 13.0)
 			await _sleep(0.016)
 
-# S1 SOLARIS // PHOTON RAKE
+# S1 SOLARIS // SOLAR APERTURE
+# Mutation IDs remain unchanged for save/upgrade compatibility. SOLARIS now
+# focuses light through moving heliostat facets rather than drawing photon rails.
 func _s1_legendary_sunfire_grid(base_direction: Vector2) -> void:
-	for i in range(9):
-		var offset := (float(i) - 4.0) * 9.0
-		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, offset)
-		var start := (origin + lateral).round()
-		var end := (start + IsoVfx.ground_vector(base_direction, 252.0)).round()
-		await _s1_project_photon_cut(start, end, 3, i % 2 == 0)
-	await _sleep(0.02)
+	var center := _target_clamped(276.0)
+	var used_ids: Dictionary = {}
+
+	for i in range(6):
+		var f := float(i) / 5.0 - 0.5
+
+		var fallback := (
+			center
+			+ IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				f * 112.0
+			)
+			+ IsoVfx.ground_vector(
+				base_direction,
+				absf(f) * 18.0
+			)
+		).round()
+
+		var enemy := _nearest_unused_enemy(
+			fallback,
+			72.0,
+			292.0,
+			used_ids
+		)
+
+		var focus := fallback
+		var tracking_id := 0
+
+		if enemy != null:
+			tracking_id = enemy.get_instance_id()
+			used_ids[tracking_id] = true
+			focus = enemy.global_position.round()
+
+		await _s1_solar_aperture_at(
+			focus,
+			tracking_id,
+			3,
+			i % 2 == 0,
+			7,
+			40.0,
+			24.0,
+			true
+		)
+
+		await _sleep(0.012)
+
 
 func _s1_legendary_solar_cross(base_direction: Vector2) -> void:
-	for i in range(8):
-		var aim := base_direction.rotated(TAU * float(i) / 8.0)
-		var end := (origin + IsoVfx.ground_vector(aim, 224.0)).round()
-		await _s1_project_photon_cut(origin, end, 3, true)
-	_pulse_ring(owner_ground, 112.0, Color(3.5, 2.2, 0.75, 1.0), Color(1.8, 0.55, 0.08, 0.25), 0.18, 40)
-	_radial_hit(owner_ground, 114.0, true)
+	# Solar Cross is now a dual, counter-rotating aperture focused exactly where
+	# the player aims. Two lens assemblies close in at different radii, making a
+	# dense volumetric solar focus without radial beam spokes.
+	var aim := _target_clamped(258.0)
+	var enemy := _nearest_enemy_to_aim(
+		aim,
+		92.0,
+		274.0
+	)
+
+	var focus := enemy.global_position.round() if enemy != null else aim
+	var tracking_id := enemy.get_instance_id() if enemy != null else 0
+
+	await _s1_solar_aperture_at(
+		focus,
+		tracking_id,
+		3,
+		false,
+		10,
+		72.0,
+		34.0,
+		true
+	)
+
+	await _sleep(0.025)
+
+	await _s1_solar_aperture_at(
+		focus,
+		tracking_id,
+		3,
+		true,
+		8,
+		50.0,
+		30.0,
+		true
+	)
+
+	_pulse_ring(
+		focus,
+		82.0,
+		Color(3.65, 2.35, 0.80, 1.0),
+		Color(1.85, 0.58, 0.08, 0.24),
+		0.18,
+		40
+	)
+
+	_radial_hit(
+		focus,
+		84.0,
+		true
+	)
+
 
 func _s1_legendary_corona_breaker(base_direction: Vector2) -> void:
-	for i in range(5):
-		var offset := (float(i) - 2.0) * 10.0
-		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, offset)
-		var start := (origin + lateral).round()
-		var end := (start + IsoVfx.ground_vector(base_direction, 244.0)).round()
-		await _s1_project_photon_cut(start, end, 3, true)
-	var center := (origin + IsoVfx.ground_vector(base_direction, 235.0)).round()
-	_pulse_ring(center, 92.0, Color(3.7, 2.4, 0.78, 1.0), Color(1.9, 0.6, 0.08, 0.28), 0.20, 44)
-	_radial_hit(center, 94.0, true)
-	_explode(center, Color(3.8, 2.0, 0.56, 1.0), Color(1.9, 0.48, 0.07, 1.0), 38.0, 42.0)
-	for i in range(12):
-		var end := IsoVfx.ground_point(center, TAU * float(i) / 12.0, 90.0).round()
-		var flare := _line(center, end, Color(3.6, 1.75, 0.5, 0.9), Color(1.8, 0.45, 0.07, 0.18))
-		_damage_line(center, end, 5.0)
-		_fade_free(flare, 0.14)
+	var aim := _target_clamped(286.0)
+	var enemy := _nearest_enemy_to_aim(
+		aim,
+		104.0,
+		302.0
+	)
+
+	var focus := enemy.global_position.round() if enemy != null else aim
+	var tracking_id := enemy.get_instance_id() if enemy != null else 0
+
+	await _s1_solar_aperture_at(
+		focus,
+		tracking_id,
+		3,
+		true,
+		16,
+		96.0,
+		44.0,
+		false
+	)
+
+	_explode(
+		focus,
+		Color(3.9, 2.1, 0.62, 1.0),
+		Color(1.95, 0.50, 0.07, 1.0),
+		42.0,
+		46.0
+	)
+
+	_pulse_ring(
+		focus,
+		104.0,
+		Color(3.75, 2.5, 0.86, 1.0),
+		Color(1.9, 0.62, 0.08, 0.26),
+		0.22,
+		48
+	)
+
+	_radial_hit(
+		focus,
+		106.0,
+		true
+	)
 
 # S2 PHANTOM // GRAVITY WELL
 func _s2_legendary_black_star(base_direction: Vector2) -> void:
@@ -3171,229 +3371,543 @@ func _r1_halo_sweep() -> void:
 		await _sleep(0.055)
 
 
-# R2 PRIMARY: BREACH CANNON
-# Still a single heavy cannon trajectory, but the shot now visibly travels and
-# tears a forward fracture cone through the crowd after impact.
-func _r2_breach_cannon() -> void:
-	var tier := primary_tier
-	var base_direction := direction
-	match legendary_mutation:
-		"rail_annihilator":
-			await _r2_legendary_rail_annihilator(base_direction)
-			return
-		"breach_trident":
-			await _r2_legendary_breach_trident(base_direction)
-			return
-		"fault_engine":
-			await _r2_legendary_fault_engine(base_direction)
-			return
-	var max_range := 250.0 + float(tier) * 18.0
-	var end := _target_clamped(max_range)
+# R2 PRIMARY: KINETIC PRESSURE RAM
+# BREACHER projects a stack of vertical pressure planes through the isometric
+# combat volume. The planes are short, physical-looking walls rather than one
+# flat trajectory, and the whole ram locks to an enemy near the player's aim.
+func _r2_make_pressure_plate(
+	at: Vector2,
+	facing: Vector2,
+	width: float,
+	height: float,
+	core: Color,
+	glow: Color
+) -> Node2D:
+	var container := Node2D.new()
+	container.global_position = at.round()
+	container.z_as_relative = false
+	root.add_child(container)
 
-	var core := Color(3.2, 2.2, 0.85, 1.0)
-	var glow := Color(1.6, 0.5, 0.1, 0.32)
-	var impact_core := Color(3.2, 1.65, 0.45, 1.0)
-	var impact_glow := Color(1.6, 0.42, 0.08, 1.0)
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	container.material = additive
 
-	# Short warning line keeps the weapon readable before the heavy slug launches.
-	var telegraph := _line(
-		origin,
-		end,
-		Color(2.8, 1.2, 0.35, 0.45),
-		Color(1.3, 0.35, 0.08, 0.12)
+	var safe_facing := facing.normalized()
+	if safe_facing.length_squared() <= 0.001:
+		safe_facing = Vector2.RIGHT
+
+	var side := IsoVfx.ground_perpendicular_offset(
+		safe_facing,
+		width * 0.5
 	)
 
-	await _sleep(0.045)
-	_fade_free(telegraph, 0.045)
-
-	var slug_head := ProjectileFxScript.new() as SpacehaulSpecialProjectile
-	root.add_child(slug_head)
-	slug_head.setup(
-		origin.round(),
-		core,
-		Color(1.7, 0.55, 0.12, 1.0),
-		1.25,
-		true
-	)
-	_set_fx_depth(slug_head, owner_ground, 1)
-	_spawn_follow_particles(
-		slug_head,
-		core,
-		impact_glow,
-		0.26,
-		68.0
+	var left_base := -side
+	var right_base := side
+	var rise := Vector2(
+		0.0,
+		-height
 	)
 
-	var slug_trail := _line(
-		origin,
-		origin,
-		core,
-		glow
+	var left_top := left_base + rise
+	var right_top := right_base + rise
+
+	var panel := Polygon2D.new()
+	panel.polygon = PackedVector2Array([
+		left_base,
+		right_base,
+		right_top,
+		left_top
+	])
+	panel.color = Color(
+		core.r,
+		core.g,
+		core.b,
+		0.16
 	)
+	container.add_child(panel)
 
-	# Higher tiers add visual pressure rails while remaining one gameplay shot.
-	var rail_a: Node2D = null
-	var rail_b: Node2D = null
-	var rail_offset := 4.0 + float(tier)
+	var bloom := Line2D.new()
+	bloom.width = BLOOM_PIXEL
+	bloom.default_color = Color(
+		glow.r,
+		glow.g,
+		glow.b,
+		0.20
+	)
+	bloom.antialiased = false
+	bloom.add_point(left_base)
+	bloom.add_point(right_base)
+	bloom.add_point(right_top)
+	bloom.add_point(left_top)
+	bloom.add_point(left_base)
+	container.add_child(bloom)
 
-	if tier >= 1:
-		var left := IsoVfx.ground_perpendicular_offset(direction, -rail_offset)
-		var right := IsoVfx.ground_perpendicular_offset(direction, rail_offset)
+	var outline := Line2D.new()
+	outline.width = CORE_PIXEL
+	outline.default_color = core
+	outline.antialiased = false
+	outline.add_point(left_base)
+	outline.add_point(right_base)
+	outline.add_point(right_top)
+	outline.add_point(left_top)
+	outline.add_point(left_base)
+	container.add_child(outline)
 
-		rail_a = _line(
-			origin + left,
-			origin + left,
-			Color(3.0, 1.45, 0.40, 0.60),
-			Color(1.4, 0.34, 0.07, 0.12)
+	# One short internal pressure band helps the panel read as a volume rather
+	# than a four-point outline.
+	var band := Line2D.new()
+	band.width = CORE_PIXEL
+	band.default_color = Color(
+		core.r,
+		core.g,
+		core.b,
+		0.68
+	)
+	band.antialiased = false
+	band.add_point(
+		left_base.lerp(
+			left_top,
+			0.48
 		)
-
-		rail_b = _line(
-			origin + right,
-			origin + right,
-			Color(3.0, 1.45, 0.40, 0.60),
-			Color(1.4, 0.34, 0.07, 0.12)
+	)
+	band.add_point(
+		right_base.lerp(
+			right_top,
+			0.48
 		)
+	)
+	container.add_child(band)
 
-	var steps := 11
-	var travel_time := maxf(0.13, 0.20 - float(tier) * 0.01)
+	_set_fx_depth(
+		container,
+		at,
+		0
+	)
 
-	for step in range(steps):
-		var t := float(step + 1) / float(steps)
-		var travel_t := 1.0 - pow(1.0 - t, 2.25)
-		var current := origin.lerp(end, travel_t).round()
+	return container
 
-		if is_instance_valid(slug_head):
-			slug_head.global_position = current
-			_set_fx_depth(slug_head, current, 1)
 
-		if is_instance_valid(slug_trail):
-			_update_depth_line_endpoint(slug_trail, current)
+func _r2_pressure_hit(
+	at: Vector2,
+	radius: float,
+	hit_ids: Dictionary,
+	push_direction: Vector2
+) -> void:
+	if preview_mode or get_world_2d() == null:
+		return
 
-		if tier >= 1:
-			var left_offset := IsoVfx.ground_perpendicular_offset(
-				direction,
-				-rail_offset
+	var shape := CircleShape2D.new()
+	shape.radius = maxf(
+		1.0,
+		radius
+	)
+
+	var query := PhysicsShapeQueryParameters2D.new()
+	query.shape = shape
+	query.transform = Transform2D(
+		0.0,
+		at
+	)
+	query.collision_mask = 2
+	query.collide_with_bodies = true
+	query.collide_with_areas = true
+
+	for hit in get_world_2d().direct_space_state.intersect_shape(
+		query,
+		64
+	):
+		var collider := hit.get(
+			"collider"
+		) as Object
+
+		if (
+			collider == null
+			or not collider.has_method(
+				"take_projectile_hit"
 			)
-			var right_offset := IsoVfx.ground_perpendicular_offset(
-				direction,
-				rail_offset
+		):
+			continue
+
+		var id := collider.get_instance_id()
+
+		if hit_ids.has(id):
+			continue
+
+		var body := collider as Node2D
+
+		if (
+			body != null
+			and not IsoVfx.inside_ground_radius(
+				at,
+				body.global_position,
+				radius
 			)
+		):
+			continue
 
-			if rail_a != null and is_instance_valid(rail_a):
-				_update_depth_line_endpoint(rail_a, current + left_offset)
+		hit_ids[id] = true
 
-			if rail_b != null and is_instance_valid(rail_b):
-				_update_depth_line_endpoint(rail_b, current + right_offset)
+		var push := push_direction.normalized()
 
-		# Tiny floor ruptures make the shell feel mechanically heavy without
-		# adding extra gameplay hits along the corridor.
-		if step == 4 or step == 8:
-			_ability_impact_fx(
-				current,
-				Color(2.9, 1.25, 0.32, 0.9),
-				Color(1.35, 0.30, 0.07, 0.8),
-				4.5 + float(tier) * 0.5
-			)
+		if push.length_squared() <= 0.001:
+			push = direction
 
-		await _sleep(travel_time / float(steps))
-
-	if is_instance_valid(slug_head):
-		slug_head.queue_free()
-
-	if is_instance_valid(slug_trail):
-		_fade_free(slug_trail, 0.18)
-
-	if rail_a != null and is_instance_valid(rail_a):
-		_fade_free(rail_a, 0.14)
-
-	if rail_b != null and is_instance_valid(rail_b):
-		_fade_free(rail_b, 0.14)
-
-	_damage_line(
-		origin,
-		end,
-		6.0 + float(tier)
-	)
-
-	# Tier 2 specifically gains the stronger impact/range identity described by
-	# its upgrade label. Tier 3 pushes that impact even further.
-	var impact_bonus := 0.0
-	if tier >= 2:
-		impact_bonus = 4.0 + float(tier - 2) * 3.0
-
-	_explode(
-		end,
-		impact_core,
-		impact_glow,
-		23.0 + float(tier) * 3.0 + impact_bonus,
-		22.0 + float(tier) * 3.0 + impact_bonus
-	)
-
-	if tier >= 2:
-		_pulse_ring(
-			end,
-			27.0 + float(tier) * 4.0,
-			Color(3.2, 2.0, 0.65, 1.0),
-			Color(1.6, 0.42, 0.08, 0.22),
-			0.17,
-			22 + tier * 4
+		collider.call(
+			"take_projectile_hit",
+			push
 		)
 
-	# Preserve the original upgrade structure: more splinters at each tier.
-	# They now fracture FORWARD beyond the main impact instead of folding back
-	# toward the player, making upgraded Breach Cannon much better in a swarm.
-	var splinters := 4 + tier * 2
-	var fracture_reach := 34.0 + float(tier) * 7.0
-	var fracture_spread := 0.82 + float(tier) * 0.06
-
-	for i in range(splinters):
-		var f := 0.0 if splinters == 1 else (
-			float(i) / float(splinters - 1) - 0.5
-		)
-		var spread_angle := f * fracture_spread * 2.0
-		var splinter_offset := IsoVfx.ground_vector(
-			direction,
-			fracture_reach,
-			spread_angle
-		)
-		var splinter_end := (end + splinter_offset).round()
-
-		var splinter := _line(
-			end,
-			splinter_end,
-			Color(3.0, 1.55, 0.45, 0.9),
-			Color(1.5, 0.4, 0.08, 0.18)
-		)
-
-		_damage_line(
-			end,
-			splinter_end,
-			3.0 + float(tier) * 0.25
+		var impact_at := (
+			body.global_position
+			if body != null
+			else at
 		)
 
 		_ability_impact_fx(
-			splinter_end,
-			Color(3.0, 1.45, 0.4, 1.0),
-			Color(1.5, 0.35, 0.08, 1.0),
-			6.0 + float(tier) * 0.5
+			impact_at,
+			Color(3.15, 1.7, 0.46, 1.0),
+			Color(1.6, 0.42, 0.08, 1.0),
+			7.5
 		)
 
-		_fade_free(splinter, 0.12)
+
+func _r2_pressure_ram_at(
+	destination: Vector2,
+	tier: int,
+	heavy: bool = false,
+	plate_count_override: int = 0
+) -> void:
+	var end := destination.round()
+	var start := owner_ground.round()
+	var travel_delta := end - start
+	var travel_direction := travel_delta.normalized()
+
+	if travel_direction.length_squared() <= 0.001:
+		travel_direction = direction
+
+	var core := (
+		Color(3.75, 2.45, 0.90, 1.0)
+		if heavy
+		else Color(3.2, 2.0, 0.70, 1.0)
+	)
+
+	var glow := (
+		Color(1.95, 0.58, 0.09, 1.0)
+		if heavy
+		else Color(1.6, 0.45, 0.08, 1.0)
+	)
+
+	var plate_count := (
+		plate_count_override
+		if plate_count_override > 0
+		else 3 + tier
+	)
+
+	var plates: Array[Node2D] = []
+
+	for i in range(plate_count):
+		var width := (
+			22.0
+			+ float(tier) * 3.0
+			+ float(i) * 2.0
+			+ (5.0 if heavy else 0.0)
+		)
+
+		var height := (
+			13.0
+			+ float(tier) * 2.0
+			+ float(i % 3) * 2.0
+			+ (5.0 if heavy else 0.0)
+		)
+
+		var plate := _r2_make_pressure_plate(
+			start,
+			travel_direction,
+			width,
+			height,
+			core,
+			glow
+		)
+
+		plate.modulate.a = 0.0
+		plates.append(plate)
+
+	var hit_ids: Dictionary = {}
+	var steps := 15
+	var travel_time := (
+		0.235
+		if heavy
+		else maxf(
+			0.15,
+			0.205 - float(tier) * 0.01
+		)
+	)
+
+	for step in range(steps):
+		var t := float(step + 1) / float(steps)
+
+		for i in range(plates.size()):
+			var plate := plates[i]
+
+			if (
+				plate == null
+				or not is_instance_valid(plate)
+			):
+				continue
+
+			var local_t := clampf(
+				t * 1.23 - float(i) * 0.075,
+				0.0,
+				1.0
+			)
+
+			var travel_t := (
+				1.0
+				- pow(
+					1.0 - local_t,
+					2.35
+				)
+			)
+
+			var current := start.lerp(
+				end,
+				travel_t
+			).round()
+
+			plate.global_position = current
+			_set_fx_depth(
+				plate,
+				current,
+				0
+			)
+
+			var pressure := sin(
+				local_t * PI
+			)
+
+			plate.modulate.a = clampf(
+				pressure * 1.15,
+				0.0,
+				1.0
+			)
+
+			plate.scale = Vector2(
+				lerpf(
+					0.72,
+					1.08,
+					pressure
+				),
+				lerpf(
+					0.86,
+					1.04,
+					pressure
+				)
+			)
+
+			if local_t > 0.05:
+				_r2_pressure_hit(
+					current,
+					12.0 + float(tier) * 2.2 + (3.0 if heavy else 0.0),
+					hit_ids,
+					travel_direction
+				)
+
+		if step == 5 or step == 10:
+			var pulse_at := start.lerp(
+				end,
+				t
+			).round()
+
+			_ability_impact_fx(
+				pulse_at,
+				Color(3.0, 1.45, 0.38, 0.86),
+				Color(1.5, 0.36, 0.07, 0.72),
+				5.5 + float(tier) * 0.5
+			)
+
+		await _sleep(
+			travel_time / float(steps)
+		)
+
+	# Hold the fully compressed ram for a beat before the plates dissolve. This
+	# makes the vertical geometry readable in motion and in captured footage.
+	await _sleep(
+		0.045 if not heavy else 0.065
+	)
+
+	for plate in plates:
+		if (
+			plate != null
+			and is_instance_valid(plate)
+		):
+			_fade_free(
+				plate,
+				0.11 if not heavy else 0.14
+			)
+
+	var impact_bonus := (
+		4.0 + float(maxi(0, tier - 2)) * 3.0
+		if tier >= 2
+		else 0.0
+	)
+
+	_explode(
+		end,
+		Color(3.3, 1.72, 0.46, 1.0),
+		Color(1.65, 0.43, 0.08, 1.0),
+		24.0 + float(tier) * 3.0 + impact_bonus + (6.0 if heavy else 0.0),
+		23.0 + float(tier) * 3.0 + impact_bonus + (6.0 if heavy else 0.0)
+	)
+
+	# A short stack of isometric impact rings replaces the old forward splinter
+	# lines. The rings grow in the target plane, making the breach read as volume.
+	var ring_count := 2 + tier
+
+	for ring_index in range(ring_count):
+		_pulse_ring(
+			end,
+			18.0 + float(ring_index) * 10.0,
+			Color(3.25, 2.05, 0.70, 1.0),
+			Color(1.65, 0.44, 0.08, 0.20),
+			0.13 + float(ring_index) * 0.015,
+			18 + tier * 4,
+			float(ring_index) * 0.17
+		)
+
+
+func _r2_fault_bulkhead_at(
+	at: Vector2,
+	facing: Vector2,
+	tier: int,
+	stage: int
+) -> void:
+	var plate := _r2_make_pressure_plate(
+		at,
+		facing,
+		28.0 + float(stage % 3) * 5.0,
+		18.0 + float(stage % 2) * 4.0,
+		Color(3.55, 2.05, 0.65, 1.0),
+		Color(1.8, 0.46, 0.08, 1.0)
+	)
+
+	plate.scale = Vector2(
+		0.58,
+		0.72
+	)
+	plate.modulate.a = 0.0
+
+	var tween := root.create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(
+		plate,
+		"scale",
+		Vector2.ONE,
+		0.055
+	)
+	tween.tween_property(
+		plate,
+		"modulate:a",
+		1.0,
+		0.045
+	)
+
+	_damage_radius(
+		at,
+		13.0 + float(tier) * 1.5,
+		facing.normalized()
+	)
+
+	_ability_impact_fx(
+		at,
+		Color(3.35, 1.62, 0.40, 1.0),
+		Color(1.7, 0.38, 0.07, 1.0),
+		10.0 + float(stage) * 0.6
+	)
+
+	await _sleep(0.07)
+
+	if is_instance_valid(plate):
+		_fade_free(
+			plate,
+			0.11
+		)
+
+
+func _r2_breach_cannon() -> void:
+	var tier := primary_tier
+	var base_direction := direction
+
+	match legendary_mutation:
+		"rail_annihilator":
+			await _r2_legendary_rail_annihilator(
+				base_direction
+			)
+			return
+
+		"breach_trident":
+			await _r2_legendary_breach_trident(
+				base_direction
+			)
+			return
+
+		"fault_engine":
+			await _r2_legendary_fault_engine(
+				base_direction
+			)
+			return
+
+	var max_range := 250.0 + float(tier) * 18.0
+	var aim := _target_clamped(
+		max_range
+	)
+
+	var enemy := _nearest_enemy_to_aim(
+		aim,
+		72.0 + float(tier) * 6.0,
+		max_range + 12.0
+	)
+
+	var end := (
+		enemy.global_position.round()
+		if enemy != null
+		else aim
+	)
+
+	# A compact target-plane ring communicates the lock without drawing a line
+	# from BREACHER to the target.
+	_pulse_ring(
+		end,
+		10.0 + float(tier),
+		Color(3.3, 2.15, 0.78, 0.9),
+		Color(1.65, 0.45, 0.08, 0.18),
+		0.10,
+		14 + tier * 2
+	)
+
+	await _sleep(0.035)
+
+	await _r2_pressure_ram_at(
+		end,
+		tier,
+		false,
+		0
+	)
 
 
 # R2 SECONDARY: COUNTERSHOCK
-# A heavy annular counter-blast. The inner pocket is intentionally untouched,
-# while the rest of the radius fills with expanding breach explosions.
+# Countershock now ejects a ring of vertical pressure shutters through the
+# isometric volume. The moving bulkheads make the blast feel spatial without
+# radial beam spokes, while the original safe pocket and crowd-control footprint
+# remain intact.
 func _r2_countershock() -> void:
 	var tier := secondary_tier
-	var blasts := 4 + tier * 2
+	var shutter_count := 6 + tier * 2
 	var radius := 82.0 + float(tier) * 11.0
 	var safe_radius := 27.0
 
 	var core := Color(3.0, 1.75, 0.55, 1.0)
 	var glow := Color(1.5, 0.45, 0.08, 1.0)
 
-	# A tight inner warning ring clearly communicates the safe center.
 	_pulse_ring(
 		owner_ground,
 		safe_radius,
@@ -3403,46 +3917,107 @@ func _r2_countershock() -> void:
 		18 + tier * 2
 	)
 
-	# Retain Countershock's directional blast spokes, but launch them from the
-	# edge of the safe pocket instead of directly through the player.
-	for i in range(blasts):
-		var angle := TAU * float(i) / float(blasts)
-		var ray_start := IsoVfx.ground_point(
+	var shutters: Array[Node2D] = []
+	var starts: Array[Vector2] = []
+	var ends: Array[Vector2] = []
+
+	for i in range(shutter_count):
+		var angle := (
+			TAU
+			* float(i)
+			/ float(shutter_count)
+		)
+
+		var start := IsoVfx.ground_point(
 			owner_ground,
 			angle,
 			safe_radius
 		).round()
+
 		var end := IsoVfx.ground_point(
 			owner_ground,
 			angle,
 			radius
 		).round()
 
-		var beam := _line(
-			ray_start,
-			end,
+		var radial_direction := (
+			end - start
+		).normalized()
+
+		var shutter := _r2_make_pressure_plate(
+			start,
+			radial_direction,
+			18.0 + float(tier) * 2.0,
+			12.0 + float(tier) * 1.5,
 			core,
-			Color(1.5, 0.45, 0.08, 0.24)
+			glow
 		)
 
-		_damage_line(
-			ray_start,
-			end,
-			5.0 + float(tier) * 0.35
+		shutter.modulate.a = 0.0
+		shutters.append(shutter)
+		starts.append(start)
+		ends.append(end)
+
+	var steps := 10
+
+	for step in range(steps):
+		var t := float(step + 1) / float(steps)
+		var travel_t := (
+			1.0
+			- pow(
+				1.0 - t,
+				2.0
+			)
 		)
 
-		_explode(
-			end,
-			Color(3.0, 1.45, 0.4, 1.0),
-			Color(1.5, 0.35, 0.08, 1.0),
-			13.0 + float(tier),
-			14.0 + float(tier)
-		)
+		for i in range(shutters.size()):
+			var shutter := shutters[i]
 
-		_fade_free(beam, 0.15)
+			if (
+				shutter == null
+				or not is_instance_valid(shutter)
+			):
+				continue
 
-	# Fill the entire donut with staged explosion coverage rather than leaving
-	# empty space between only a few radial endpoints.
+			var current := starts[i].lerp(
+				ends[i],
+				travel_t
+			).round()
+
+			shutter.global_position = current
+			_set_fx_depth(
+				shutter,
+				current,
+				0
+			)
+
+			shutter.modulate.a = clampf(
+				sin(t * PI) * 1.15,
+				0.0,
+				1.0
+			)
+
+			shutter.scale = Vector2(
+				lerpf(
+					0.72,
+					1.06,
+					t
+				),
+				1.0
+			)
+
+		await _sleep(0.018)
+
+	for shutter in shutters:
+		if (
+			shutter != null
+			and is_instance_valid(shutter)
+		):
+			_fade_free(
+				shutter,
+				0.12
+			)
+
 	await _radial_explosion_field(
 		owner_ground,
 		safe_radius + 6.0,
@@ -3462,18 +4037,20 @@ func _r2_countershock() -> void:
 		true
 	)
 
-	# Max-tier counter core gets a final perimeter concussion without ever
-	# detonating beneath the chassis.
 	if tier >= 3:
 		await _sleep(0.035)
 
 		var outer_points := 12
 		var played_finisher_sound := false
+
 		for i in range(outer_points):
 			var angle := (
-				TAU * float(i) / float(outer_points)
+				TAU
+				* float(i)
+				/ float(outer_points)
 				+ PI / float(outer_points)
 			)
+
 			var edge := IsoVfx.ground_point(
 				owner_ground,
 				angle,
@@ -3487,6 +4064,7 @@ func _r2_countershock() -> void:
 				9.5,
 				not played_finisher_sound
 			)
+
 			played_finisher_sound = true
 
 	await _sleep(0.05)
@@ -4082,173 +4660,471 @@ func _r4_emp_crown() -> void:
 		_fade_free(ring, 0.16)
 		await _sleep(0.07)
 
-# S1 PRIMARY: PHOTON RAKE
-# SOLARIS sweeps a bank of projected photon cutters across the deck. Each lane
-# visibly grows from the chassis instead of appearing at full length at once.
+# S1 PRIMARY: SOLAR APERTURE
+# SOLARIS no longer sweeps flat photon rails. It deploys a ring of heliostat
+# facets around the aimed enemy; the facets rotate and contract through the
+# isometric ground plane like a camera iris, concentrating light into a pulse.
+func _s1_make_heliostat_facet(
+	at: Vector2,
+	size: float,
+	overburn: bool = false
+) -> Node2D:
+	var container := Node2D.new()
+	container.global_position = at.round()
+	container.z_as_relative = false
+	root.add_child(container)
+
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	container.material = additive
+
+	var core := (
+		Color(3.65, 2.15, 0.78, 1.0)
+		if overburn
+		else Color(3.15, 1.15, 0.60, 1.0)
+	)
+
+	var glow := (
+		Color(1.9, 0.62, 0.08, 1.0)
+		if overburn
+		else Color(1.6, 0.34, 0.10, 1.0)
+	)
+
+	var half_w := size
+	var half_h := maxf(
+		2.0,
+		size * 0.32
+	)
+	var thickness := (
+		4.0
+		if overburn
+		else 3.0
+	)
+
+	var top_points := PackedVector2Array([
+		Vector2(-half_w, 0.0),
+		Vector2(0.0, -half_h),
+		Vector2(half_w, 0.0),
+		Vector2(0.0, half_h)
+	])
+
+	var lower_points := PackedVector2Array([
+		Vector2(-half_w, thickness),
+		Vector2(0.0, -half_h + thickness),
+		Vector2(half_w, thickness),
+		Vector2(0.0, half_h + thickness)
+	])
+
+	# A darker lower plate plus the bright upper mirror gives every facet visible
+	# thickness, which is important in the otherwise flat 2D scene.
+	var lower := Polygon2D.new()
+	lower.polygon = lower_points
+	lower.color = Color(
+		glow.r,
+		glow.g,
+		glow.b,
+		0.16
+	)
+	container.add_child(lower)
+
+	var top := Polygon2D.new()
+	top.polygon = top_points
+	top.color = Color(
+		core.r,
+		core.g,
+		core.b,
+		0.28
+	)
+	container.add_child(top)
+
+	var outline := Line2D.new()
+	outline.width = CORE_PIXEL
+	outline.default_color = core
+	outline.antialiased = false
+
+	for point in top_points:
+		outline.add_point(point)
+	outline.add_point(top_points[0])
+
+	container.add_child(outline)
+
+	_set_fx_depth(
+		container,
+		at,
+		0
+	)
+
+	return container
+
+
+func _s1_resolve_focus(
+	tracking_target_id: int,
+	fallback: Vector2
+) -> Vector2:
+	if tracking_target_id == 0:
+		return fallback.round()
+
+	var tracked_object := instance_from_id(
+		tracking_target_id
+	)
+	var tracked_node := tracked_object as Node2D
+
+	if (
+		tracked_node != null
+		and is_instance_valid(tracked_node)
+		and tracked_node.is_inside_tree()
+	):
+		return tracked_node.global_position.round()
+
+	return fallback.round()
+
+
+func _s1_solar_aperture_at(
+	fallback_center: Vector2,
+	tracking_target_id: int,
+	tier: int,
+	overburn: bool = false,
+	facet_count_override: int = 0,
+	start_radius_override: float = 0.0,
+	impact_radius_override: float = 0.0,
+	apply_damage: bool = true
+) -> void:
+	var facet_count := (
+		facet_count_override
+		if facet_count_override > 0
+		else 5 + tier * 2
+	)
+
+	var start_radius := (
+		start_radius_override
+		if start_radius_override > 0.0
+		else 48.0 + float(tier) * 7.0
+	)
+
+	var impact_radius := (
+		impact_radius_override
+		if impact_radius_override > 0.0
+		else 26.0 + float(tier) * 4.0
+	)
+
+	var core := (
+		Color(3.7, 2.25, 0.82, 1.0)
+		if overburn
+		else Color(3.2, 1.25, 0.64, 1.0)
+	)
+
+	var glow := (
+		Color(1.9, 0.62, 0.08, 1.0)
+		if overburn
+		else Color(1.6, 0.36, 0.10, 1.0)
+	)
+
+	var facets: Array[Node2D] = []
+	var base_phase := (
+		0.38
+		if overburn
+		else 0.0
+	)
+
+	var center := _s1_resolve_focus(
+		tracking_target_id,
+		fallback_center
+	)
+
+	for i in range(facet_count):
+		var angle := (
+			base_phase
+			+ TAU
+			* float(i)
+			/ float(facet_count)
+		)
+
+		var facet_at := IsoVfx.ground_point(
+			center,
+			angle,
+			start_radius
+		).round()
+
+		var facet := _s1_make_heliostat_facet(
+			facet_at,
+			4.5 + float(tier) * 0.55 + (1.0 if overburn else 0.0),
+			overburn
+		)
+
+		facet.rotation = (
+			(facet_at - center).angle()
+			+ PI * 0.5
+		)
+		facet.modulate.a = 0.0
+		facets.append(facet)
+
+	# Brief target-plane aperture marker; no origin-to-target telegraph is needed.
+	_pulse_ring(
+		center,
+		start_radius,
+		core,
+		Color(glow.r, glow.g, glow.b, 0.16),
+		0.12,
+		24 + tier * 4,
+		base_phase
+	)
+
+	var steps := 12
+	var duration := (
+		0.19
+		if overburn
+		else maxf(
+			0.14,
+			0.18 - float(tier) * 0.008
+		)
+	)
+
+	for step in range(steps):
+		var t := float(step + 1) / float(steps)
+
+		center = _s1_resolve_focus(
+			tracking_target_id,
+			center
+		)
+
+		var close_t := (
+			t * t * (
+				3.0 - 2.0 * t
+			)
+		)
+
+		var aperture_radius := lerpf(
+			start_radius,
+			9.0 + float(tier),
+			close_t
+		)
+
+		var rotation_amount := (
+			0.72
+			+ float(tier) * 0.08
+		) * t * (
+			-1.0 if overburn else 1.0
+		)
+
+		for i in range(facets.size()):
+			var facet := facets[i]
+
+			if (
+				facet == null
+				or not is_instance_valid(facet)
+			):
+				continue
+
+			var angle := (
+				base_phase
+				+ TAU
+				* float(i)
+				/ float(facet_count)
+				+ rotation_amount
+			)
+
+			var facet_at := IsoVfx.ground_point(
+				center,
+				angle,
+				aperture_radius
+			).round()
+
+			facet.global_position = facet_at
+			_set_fx_depth(
+				facet,
+				facet_at,
+				0
+			)
+
+			facet.rotation = (
+				(facet_at - center).angle()
+				+ PI * 0.5
+				+ rotation_amount * 0.25
+			)
+
+			facet.modulate.a = clampf(
+				sin(t * PI) * 1.25,
+				0.0,
+				1.0
+			)
+
+			var focus_scale := lerpf(
+				0.80,
+				1.24 if overburn else 1.10,
+				close_t
+			)
+
+			facet.scale = Vector2.ONE * focus_scale
+
+		if step == 5 or step == 9:
+			_spark_pixels(
+				center,
+				core,
+				glow,
+				3 + tier,
+				12.0 + float(tier) * 2.0,
+				0.16
+			)
+
+		await _sleep(
+			duration / float(steps)
+		)
+
+	# Hold the closed iris for a fraction before the facets flash out.
+	await _sleep(
+		0.045 if not overburn else 0.060
+	)
+
+	for facet in facets:
+		if (
+			facet != null
+			and is_instance_valid(facet)
+		):
+			_fade_free(
+				facet,
+				0.10 if not overburn else 0.13
+			)
+
+	_ability_impact_fx(
+		center,
+		Color(3.45, 1.55, 0.52, 1.0),
+		Color(1.75, 0.42, 0.08, 1.0),
+		12.0 + float(tier) * 1.5 + (3.0 if overburn else 0.0),
+		overburn
+	)
+
+	_pulse_ring(
+		center,
+		impact_radius,
+		core,
+		Color(glow.r, glow.g, glow.b, 0.24),
+		0.15,
+		22 + tier * 4,
+		base_phase + 0.25
+	)
+
+	if apply_damage:
+		_damage_radius(
+			center,
+			impact_radius,
+			(center - owner_ground).normalized()
+		)
+
+
+# Compatibility wrapper: older mutation/call sites can still request a photon
+# cut, but it resolves as a compact solar aperture at the requested endpoint.
 func _s1_project_photon_cut(
 	start: Vector2,
 	end: Vector2,
 	tier: int,
 	overburn: bool = false
 ) -> void:
-	var core := (
-		Color(3.25, 1.35, 0.62, 1.0)
-		if overburn
-		else Color(3.0, 0.72, 0.52, 1.0)
-	)
-	var glow := (
-		Color(1.7, 0.42, 0.10, 1.0)
-		if overburn
-		else Color(1.5, 0.22, 0.12, 1.0)
-	)
-
-	var head := ProjectileFxScript.new() as SpacehaulSpecialProjectile
-	root.add_child(head)
-	head.setup(
-		start.round(),
-		core,
-		glow,
-		1.30 if overburn else 1.05,
+	await _s1_solar_aperture_at(
+		end,
+		0,
+		tier,
+		overburn,
+		5 + tier,
+		38.0 + float(tier) * 4.0,
+		20.0 + float(tier) * 3.0,
 		true
 	)
-	_set_fx_depth(head, Vector2(start.x, _depth_y_for_point(start)), 1)
-
-	var travel_time := maxf(
-		0.050,
-		(0.072 if overburn else 0.082) - float(tier) * 0.005
-	)
-
-	_spawn_follow_particles(
-		head,
-		core,
-		glow,
-		travel_time + 0.06,
-		78.0 if overburn else 64.0
-	)
-
-	var beam := _line(
-		start,
-		start,
-		core,
-		Color(glow.r, glow.g, glow.b, 0.26 if overburn else 0.20)
-	)
-
-	var steps := 8
-	for step in range(steps):
-		var t := float(step + 1) / float(steps)
-		var travel_t := 1.0 - pow(1.0 - t, 2.1)
-		var current := start.lerp(end, travel_t).round()
-
-		if is_instance_valid(head):
-			head.global_position = current
-			_set_fx_depth(head, current, 1)
-
-		if is_instance_valid(beam):
-			_update_depth_line_endpoint(beam, current)
-
-		await _sleep(travel_time / float(steps))
-
-	if is_instance_valid(head):
-		head.queue_free()
-
-	_damage_line(
-		start,
-		end,
-		5.0 + float(tier) * 0.35 + (1.0 if overburn else 0.0)
-	)
-
-	_explode(
-		end,
-		Color(3.25, 1.35, 0.48, 1.0) if overburn else Color(3.0, 0.82, 0.42, 1.0),
-		Color(1.7, 0.38, 0.08, 1.0) if overburn else Color(1.5, 0.22, 0.10, 1.0),
-		11.0 + float(tier) + (2.0 if overburn else 0.0),
-		10.0 + float(tier) + (2.0 if overburn else 0.0)
-	)
-
-	if is_instance_valid(beam):
-		_fade_free(beam, 0.14 if overburn else 0.12)
 
 
 func _s1_photon_rake() -> void:
 	var tier := primary_tier
 	var base_direction := direction
+
 	match legendary_mutation:
 		"sunfire_grid":
-			await _s1_legendary_sunfire_grid(base_direction)
-			return
-		"solar_cross":
-			await _s1_legendary_solar_cross(base_direction)
-			return
-		"corona_breaker":
-			await _s1_legendary_corona_breaker(base_direction)
-			return
-	var beam_count := 3 + tier * 2
-	var reach := 206.0 + float(tier) * 14.0
-	var spacing := 6.0
-
-	# Sweep cleanly from one side of the chassis to the other so PHOTON RAKE
-	# reads as an actual cutting pass instead of several simultaneous tracers.
-	for i in range(beam_count):
-		var offset := (
-			float(i) - float(beam_count - 1) * 0.5
-		) * spacing
-
-		var lateral := IsoVfx.ground_perpendicular_offset(
-			direction,
-			offset
-		)
-
-		var start := (origin + lateral).round()
-		var end := (
-			start
-			+ IsoVfx.ground_vector(
-				direction,
-				reach
+			await _s1_legendary_sunfire_grid(
+				base_direction
 			)
-		).round()
+			return
 
-		await _s1_project_photon_cut(
-			start,
-			end,
-			tier,
-			false
-		)
+		"solar_cross":
+			await _s1_legendary_solar_cross(
+				base_direction
+			)
+			return
 
-	# Tier 2+ gains a hotter overburn pass down the center. Tier 3 splits that
-	# follow-up into two close rails, giving the final upgrade a distinct finish
-	# without changing the weapon's forward-raking identity.
+		"corona_breaker":
+			await _s1_legendary_corona_breaker(
+				base_direction
+			)
+			return
+
+	var reach := 220.0 + float(tier) * 14.0
+	var aim := _target_clamped(
+		reach
+	)
+	var used_ids: Dictionary = {}
+
+	var enemy := _nearest_unused_enemy(
+		aim,
+		82.0 + float(tier) * 7.0,
+		reach + 10.0,
+		used_ids
+	)
+
+	var focus := aim
+	var tracking_id := 0
+
+	if enemy != null:
+		tracking_id = enemy.get_instance_id()
+		used_ids[tracking_id] = true
+		focus = enemy.global_position.round()
+
+	await _s1_solar_aperture_at(
+		focus,
+		tracking_id,
+		tier,
+		false,
+		5 + tier * 2,
+		48.0 + float(tier) * 7.0,
+		26.0 + float(tier) * 4.0,
+		true
+	)
+
+	# Tier II and III add a second hot lens to a different nearby enemy when one
+	# exists. If the crowd is sparse, the echo shifts laterally around the aim
+	# point rather than simply repeating the exact same hit.
 	if tier >= 2:
 		await _sleep(0.025)
 
-		var overburn_count := 1 if tier == 2 else 2
-		for i in range(overburn_count):
-			var offset := 0.0
-
-			if overburn_count > 1:
-				offset = (
-					float(i) - float(overburn_count - 1) * 0.5
-				) * 7.0
-
-			var lateral := IsoVfx.ground_perpendicular_offset(
-				direction,
-				offset
+		var fallback := (
+			aim
+			+ IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				30.0 if tier == 2 else -34.0
 			)
+		).round()
 
-			var start := (origin + lateral).round()
-			var end := (
-				start
-				+ IsoVfx.ground_vector(
-					direction,
-					reach + 18.0 + float(tier) * 3.0
-				)
-			).round()
+		var second_enemy := _nearest_unused_enemy(
+			fallback,
+			76.0,
+			reach + 18.0,
+			used_ids
+		)
 
-			await _s1_project_photon_cut(
-				start,
-				end,
-				tier,
-				true
-			)
+		var second_focus := fallback
+		var second_tracking_id := 0
+
+		if second_enemy != null:
+			second_tracking_id = second_enemy.get_instance_id()
+			used_ids[second_tracking_id] = true
+			second_focus = second_enemy.global_position.round()
+
+		await _s1_solar_aperture_at(
+			second_focus,
+			second_tracking_id,
+			tier,
+			true,
+			6 + tier * 2,
+			42.0 + float(tier) * 6.0,
+			24.0 + float(tier) * 4.0,
+			true
+		)
 
 
 # S1 SECONDARY: SOLAR FLARE
