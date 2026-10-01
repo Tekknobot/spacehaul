@@ -28,10 +28,33 @@ const FLOOR_TEXTURES: Array[Texture2D] = [
 # feature panels. The weights total 100 so they also read as percentages.
 # 01: 32%, 02: 19%, 03: 12%, 04: 9%, then progressively rarer through 16.
 const FLOOR_TILE_WEIGHTS: Array[float] = [
-	45.0, 15.368, 9.706, 7.279, 5.662, 4.044, 3.235, 2.426,
-	2.022, 1.618, 1.213, 0.809, 0.607, 0.404, 0.324, 0.283,
+	75.0, 25.613, 16.177, 12.132, 9.437, 6.740, 5.392, 4.043,
+	3.370, 2.697, 2.022, 1.348, 1.012, 0.673, 0.540, 0.472,
 ]
 const FLOOR_FEATURE_START_INDEX := 8
+
+# 64x64 authored environmental set pieces. They share the same 64x32 floor
+# footprint as one isometric tile, with that floor diamond centered inside the
+# larger canvas while the prop art rises above it. Collision remains on the
+# underlying one-cell diamond footprint.
+const SET_PIECE_TEXTURES: Array[Texture2D] = [
+	preload("res://Sprites/Tiles/SetPieces/set_piece_01.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_02.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_03.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_04.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_05.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_06.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_07.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_08.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_09.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_10.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_11.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_12.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_13.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_14.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_15.png"),
+	preload("res://Sprites/Tiles/SetPieces/set_piece_16.png"),
+]
 
 const DECK_PALETTE_SHADER: Shader = preload("res://Shaders/deck_palette.gdshader")
 const HAZARD_GAS_SCRIPT: GDScript = preload("res://Scripts/hazard_gas.gd")
@@ -121,6 +144,10 @@ signal regenerated(new_spawn: Vector2, new_seed: int)
 @export_range(0.0, 1.0, 0.01) var floor_grill_chance := 0.18
 @export_range(0.0, 1.0, 0.01) var floor_light_chance := 0.06
 @export_range(0.0, 1.0, 0.01) var wall_vent_chance := 0.10
+@export_range(0.0, 1.0, 0.01) var set_piece_room_chance := 0.86
+@export_range(1, 4, 1) var set_piece_max_per_room := 3
+@export_range(0.45, 0.95, 0.01) var set_piece_collision_width := 0.78
+@export_range(0.45, 0.95, 0.01) var set_piece_collision_height := 0.74
 
 var seed_value := 0
 var spawn_position := Vector2.ZERO
@@ -132,8 +159,11 @@ var _rooms: Array[Rect2i] = []
 var _hazard_cells: Array[Vector2i] = []
 var _accent_cells: Array[Vector2i] = []
 var _floor_styles: Dictionary = {}
+var _set_piece_cells: Dictionary = {}
+var _set_piece_protected_cells: Dictionary = {}
 var _start_cell := Vector2i.ONE
 var _floor_visual_root: Node2D
+var _set_piece_visual_root: Node2D
 var _overlay_visual_root: Node2D
 var _wall_visual_root: Node2D
 var _path_grid := AStarGrid2D.new()
@@ -154,6 +184,13 @@ func _ready() -> void:
 		_floor_visual_root.name = "FloorVisualRoot"
 		add_child(_floor_visual_root)
 	_floor_visual_root.z_index = 0
+
+	_set_piece_visual_root = get_node_or_null("SetPieceVisualRoot") as Node2D
+	if _set_piece_visual_root == null:
+		_set_piece_visual_root = Node2D.new()
+		_set_piece_visual_root.name = "SetPieceVisualRoot"
+		add_child(_set_piece_visual_root)
+	_set_piece_visual_root.z_index = 0
 
 	_overlay_visual_root = get_node_or_null("OverlayVisualRoot") as Node2D
 	if _overlay_visual_root == null:
@@ -189,9 +226,20 @@ func generate_new_level(requested_seed: int = -1) -> void:
 	_normalize_generation_values()
 	_build_room_and_hall_deck()
 	_assign_expedition_rooms()
+	# Clear the previous deck's obstacle metadata before building the pristine
+	# carved graph used to reserve this deck's beacon routes.
+	_set_piece_cells.clear()
+	_set_piece_protected_cells.clear()
+	# First pass is the unobstructed deck graph. Set-piece placement uses it to
+	# reserve guaranteed routes from deployment to every expedition beacon.
 	_rebuild_path_grid()
 	_select_decorations()
+	# Rebuild once more after set pieces are known so enemy navigation treats
+	# those cells exactly like solid environmental geometry.
+	_rebuild_path_grid()
+	_ensure_set_piece_beacon_routes()
 	_rebuild_floor_visuals()
+	_rebuild_set_piece_visuals()
 	_rebuild_collisions()
 	_rebuild_wall_visuals()
 	_rebuild_hazards()
@@ -363,6 +411,8 @@ func _select_decorations() -> void:
 	_hazard_cells.clear()
 	_accent_cells.clear()
 	_floor_styles.clear()
+	_set_piece_cells.clear()
+	_set_piece_protected_cells.clear()
 
 	var floor_cells: Array[Vector2i] = []
 
@@ -379,14 +429,146 @@ func _select_decorations() -> void:
 			if tile_index >= FLOOR_FEATURE_START_INDEX:
 				_accent_cells.append(cell)
 
+	# Reserve navigation first, then decorate only room interiors. This guarantees
+	# at least one clear route from deployment to every objective/Hive/Extraction
+	# beacon even on the densest later decks.
+	_build_set_piece_protected_cells()
+	_select_set_piece_cells()
+
+	for x in range(1, grid_width - 1):
+		for y in range(1, grid_height - 1):
+			if not _walkable[x][y]:
+				continue
+			var cell := Vector2i(x, y)
+			if _set_piece_cells.has(cell):
+				continue
 			if Vector2(cell).distance_to(Vector2(_start_cell)) >= 7.0:
 				floor_cells.append(cell)
 
 	# Hazards are gameplay metadata now, not a special floor texture. This keeps
-	# the FloorTiles art intact and lets any floor design become dangerous.
+	# the FloorTiles art intact and lets any unobstructed floor design become
+	# dangerous without overlapping solid set pieces.
 	_shuffle_cells(floor_cells)
 	for i in range(mini(hazard_count, floor_cells.size())):
 		_hazard_cells.append(floor_cells[i])
+
+
+func _build_set_piece_protected_cells() -> void:
+	_set_piece_protected_cells.clear()
+
+	# Give the deployment pad enough breathing room for the full mecha roster.
+	_reserve_set_piece_clearance(_start_cell, 2)
+
+	# The current path grid still represents the unobstructed carved deck here.
+	# Reserve a widened shortest path to every expedition room center. Set pieces
+	# can decorate around these lanes, but can never sever them.
+	for special in _expedition_special_rooms:
+		var center_cell: Vector2i = special.get("center_cell", _start_cell)
+		_reserve_set_piece_clearance(center_cell, 1)
+
+		if not _inside(center_cell):
+			continue
+
+		var path := _path_grid.get_id_path(_start_cell, center_cell)
+		for path_value in path:
+			var path_cell: Vector2i = path_value
+			_reserve_set_piece_clearance(path_cell, 1)
+
+
+func _ensure_set_piece_beacon_routes() -> void:
+	# The protected lanes should make this a no-op. Keep a hard runtime fallback
+	# anyway: if a future generation change ever invalidates those assumptions,
+	# environmental dressing is discarded rather than shipping an unreachable
+	# objective deck.
+	for special in _expedition_special_rooms:
+		var center_cell: Vector2i = special.get("center_cell", _start_cell)
+		if not _inside(center_cell):
+			continue
+		var path := _path_grid.get_id_path(_start_cell, center_cell)
+		if path.is_empty():
+			push_warning(
+				"Set-piece layout blocked expedition beacon %s; clearing environmental obstacles."
+				% String(special.get("role", "SECTOR"))
+			)
+			_set_piece_cells.clear()
+			_rebuild_path_grid()
+			return
+
+
+func _reserve_set_piece_clearance(center_cell: Vector2i, radius: int) -> void:
+	var safe_radius := maxi(0, radius)
+	for x in range(center_cell.x - safe_radius, center_cell.x + safe_radius + 1):
+		for y in range(center_cell.y - safe_radius, center_cell.y + safe_radius + 1):
+			var cell := Vector2i(x, y)
+			if not _inside(cell):
+				continue
+			if not _walkable[x][y]:
+				continue
+			_set_piece_protected_cells[cell] = true
+
+
+func _select_set_piece_cells() -> void:
+	if SET_PIECE_TEXTURES.is_empty():
+		return
+
+	var texture_cursor := _rng.randi_range(0, SET_PIECE_TEXTURES.size() - 1)
+
+	for room_index in range(_rooms.size()):
+		var room := _rooms[room_index]
+
+		# The deployment room stays visually calm. Other sectors receive one to
+		# three pieces depending on usable area, with later/larger rooms naturally
+		# getting more environmental mass.
+		if room_index == 0:
+			continue
+		if _rng.randf() > set_piece_room_chance:
+			continue
+
+		var candidates: Array[Vector2i] = []
+		var margin := 1
+		for x in range(room.position.x + margin, room.end.x - margin):
+			for y in range(room.position.y + margin, room.end.y - margin):
+				var cell := Vector2i(x, y)
+				if not _inside(cell) or not _walkable[x][y]:
+					continue
+				if _set_piece_protected_cells.has(cell):
+					continue
+				candidates.append(cell)
+
+		if candidates.is_empty():
+			continue
+
+		_shuffle_cells(candidates)
+		var room_area := room.size.x * room.size.y
+		var desired_count := clampi(int(round(float(room_area) / 24.0)), 1, set_piece_max_per_room)
+		var placed := 0
+
+		for cell in candidates:
+			if placed >= desired_count:
+				break
+			if _set_piece_has_neighbor(cell, 2):
+				continue
+
+			_set_piece_cells[cell] = texture_cursor
+			texture_cursor = (texture_cursor + 1 + _rng.randi_range(0, 2)) % SET_PIECE_TEXTURES.size()
+			placed += 1
+
+
+func _set_piece_has_neighbor(cell: Vector2i, radius: int) -> bool:
+	for x in range(cell.x - radius, cell.x + radius + 1):
+		for y in range(cell.y - radius, cell.y + radius + 1):
+			if _set_piece_cells.has(Vector2i(x, y)):
+				return true
+	return false
+
+
+func _cell_is_traversable(cell: Vector2i) -> bool:
+	return (
+		_inside(cell)
+		and _walkable[cell.x][cell.y]
+		and not _set_piece_cells.has(cell)
+	)
+
 
 func _choose_floor_tile_index(cell: Vector2i) -> int:
 	# The spawn pad always uses the most common structural tile so the player
@@ -461,6 +643,40 @@ func _rebuild_floor_visuals() -> void:
 				sprite.material = _deck_palette_material
 			_floor_visual_root.add_child(sprite)
 
+func _rebuild_set_piece_visuals() -> void:
+	if _set_piece_visual_root == null:
+		return
+	_clear_children(_set_piece_visual_root)
+
+	# The images are 64x64, but inspection of their alpha bounds shows the authored
+	# 64x32 floor diamond already occupies the middle of that canvas. Centering the
+	# sprite on the cell therefore aligns it exactly with the normal floor tile; the
+	# pixels above that diamond provide the intended isometric height.
+	# Each holder receives an absolute depth index from its floor contact, so
+	# dictionary iteration order cannot affect front/behind rendering.
+	for key in _set_piece_cells.keys():
+		var cell: Vector2i = key
+		var texture_index := clampi(int(_set_piece_cells.get(cell, 0)), 0, SET_PIECE_TEXTURES.size() - 1)
+		var texture := SET_PIECE_TEXTURES[texture_index]
+		var center := _cell_center(cell).round()
+
+		var holder := Node2D.new()
+		holder.name = "SetPiece_%d_%d" % [cell.x, cell.y]
+		holder.position = center
+		holder.z_as_relative = false
+		holder.z_index = clampi(int(round(center.y)) + 1, -3000, 3000)
+		_set_piece_visual_root.add_child(holder)
+
+		var sprite := Sprite2D.new()
+		sprite.texture = texture
+		sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		sprite.centered = true
+		sprite.position = Vector2.ZERO
+		if _deck_palette_material != null:
+			sprite.material = _deck_palette_material
+		holder.add_child(sprite)
+
+
 func _rebuild_collisions() -> void:
 	_clear_children(collision_root)
 	var body := StaticBody2D.new()
@@ -482,6 +698,22 @@ func _rebuild_collisions() -> void:
 			collider.position = _cell_center(cell)
 			collider.shape = shape
 			body.add_child(collider)
+
+	# Set pieces are solid deck geometry. Their sprite rises above the floor, but
+	# collision stays centered on the authored one-cell footprint so the player and
+	# enemies naturally pass in front of/behind the visual without clipping through it.
+	for key in _set_piece_cells.keys():
+		var cell: Vector2i = key
+		var shape := ConvexPolygonShape2D.new()
+		shape.points = _diamond_points_local(
+			tile_width * set_piece_collision_width,
+			tile_height * set_piece_collision_height
+		)
+		var collider := CollisionShape2D.new()
+		collider.name = "SetPieceCollision_%d_%d" % [cell.x, cell.y]
+		collider.position = _cell_center(cell)
+		collider.shape = shape
+		body.add_child(collider)
 
 func _rebuild_wall_visuals() -> void:
 	_clear_children(_wall_visual_root)
@@ -869,6 +1101,14 @@ func _apply_palette_material_to_visuals() -> void:
 			if canvas_child != null:
 				canvas_child.material = _deck_palette_material
 
+	if _set_piece_visual_root != null:
+		_set_piece_visual_root.modulate = fallback_tint
+		for holder in _set_piece_visual_root.get_children():
+			for child in holder.get_children():
+				var canvas_child := child as CanvasItem
+				if canvas_child != null:
+					canvas_child.material = _deck_palette_material
+
 	if _wall_visual_root != null:
 		_wall_visual_root.modulate = fallback_tint
 		for block in _wall_visual_root.get_children():
@@ -977,9 +1217,9 @@ func get_mecha_spawn_positions(count: int) -> Array[Vector2]:
 	var cells: Array[Vector2i] = []
 	for x in range(1, grid_width - 1):
 		for y in range(1, grid_height - 1):
-			if not _walkable[x][y]:
-				continue
 			var cell := Vector2i(x, y)
+			if not _cell_is_traversable(cell):
+				continue
 			if cell in _hazard_cells:
 				continue
 			cells.append(cell)
@@ -1027,8 +1267,9 @@ func _rebuild_path_grid() -> void:
 	_path_grid.update()
 	for x in range(grid_width):
 		for y in range(grid_height):
-			if not _walkable[x][y]:
-				_path_grid.set_point_solid(Vector2i(x, y), true)
+			var cell := Vector2i(x, y)
+			if not _walkable[x][y] or _set_piece_cells.has(cell):
+				_path_grid.set_point_solid(cell, true)
 
 func world_to_cell(world_position: Vector2) -> Vector2i:
 	# Inverse of the 2:1 isometric projection used by _cell_center().
@@ -1041,7 +1282,7 @@ func get_next_path_step(from_world: Vector2, to_world: Vector2) -> Vector2:
 	var to_cell := world_to_cell(to_world)
 	if not _inside(from_cell) or not _inside(to_cell):
 		return to_world
-	if not _walkable[from_cell.x][from_cell.y] or not _walkable[to_cell.x][to_cell.y]:
+	if not _cell_is_traversable(from_cell) or not _cell_is_traversable(to_cell):
 		return to_world
 	var path := _path_grid.get_id_path(from_cell, to_cell)
 	if path.size() >= 2:
@@ -1058,7 +1299,7 @@ func get_random_walkable_position_near(center_world: Vector2, radius_cells: int,
 			var cell := Vector2i(x, y)
 			if not _inside(cell):
 				continue
-			if not _walkable[x][y] or cell in _hazard_cells:
+			if not _cell_is_traversable(cell) or cell in _hazard_cells:
 				continue
 			candidates.append(cell)
 	if candidates.is_empty():
@@ -1074,9 +1315,9 @@ func get_enemy_spawn_positions(count: int, minimum_distance_cells: int = 7) -> A
 	var candidates: Array[Vector2i] = []
 	for x in range(1, grid_width - 1):
 		for y in range(1, grid_height - 1):
-			if not _walkable[x][y]:
-				continue
 			var cell := Vector2i(x, y)
+			if not _cell_is_traversable(cell):
+				continue
 			if cell in _hazard_cells:
 				continue
 			if Vector2(cell).distance_to(Vector2(_start_cell)) < float(minimum_distance_cells):
@@ -1105,9 +1346,9 @@ func get_random_enemy_spawn_position(reference_world: Vector2, minimum_distance_
 	var minimum_distance := float(maxi(1, minimum_distance_cells))
 	for x in range(1, grid_width - 1):
 		for y in range(1, grid_height - 1):
-			if not _walkable[x][y]:
-				continue
 			var cell := Vector2i(x, y)
+			if not _cell_is_traversable(cell):
+				continue
 			if cell in _hazard_cells:
 				continue
 			if Vector2(cell).distance_to(Vector2(reference_cell)) < minimum_distance:
