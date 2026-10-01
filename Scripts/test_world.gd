@@ -22,9 +22,18 @@ const EXPEDITION_DECK_COUNT := 5
 @export_category("Video Capture")
 @export var video_capture_mode := false
 @export_range(1.0, 19.0, 0.5) var video_capture_start_minutes := 15.0
+# Expedition capture no longer derives progression from the legacy four-minute
+# survival deck timer. Pick the deck and the useful recording phase directly.
+# EXPLORE = fresh deck spawn, OBJECTIVE = stage at the next unsecured system,
+# BOSS = all four systems secured and stage at the Hive, EXTRACTION = boss clear
+# and stage directly in the evac room so the deck-transfer shot can be captured.
+@export_range(1, 5, 1) var video_capture_expedition_deck := 3
+@export_enum("EXPLORE", "OBJECTIVE", "BOSS", "EXTRACTION") var video_capture_expedition_phase := 1
+@export_range(0, 3, 1) var video_capture_expedition_completed_objectives := 2
 # Late-run showcase captures should include the build-defining Omega state that a
-# normal player would almost certainly have hunted by this point. Disable this
-# when recording the Tier III signature attack before its Legendary mutation.
+# normal player would almost certainly have hunted by this point. Expedition
+# captures additionally cap this to the Core opportunities that could have been
+# earned by the selected deck/phase.
 @export var video_capture_include_omega := true
 @export_range(0, 2, 1) var video_capture_omega_choice := 0
 @export_range(1.0, 15.0, 0.5) var video_capture_omega_minute := 3.0
@@ -797,10 +806,20 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 	_set_standard_hud_visible(false)
 	if _mecha_select_status != null:
 		if video_capture_mode:
-			_mecha_select_status.text = "VIDEO CAPTURE  %02d:%02d      LEFT RIGHT SELECT      ENTER A DEPLOY" % [
-				int(video_capture_start_minutes),
-				int(round(fmod(video_capture_start_minutes, 1.0) * 60.0))
-			]
+			if expedition_mode:
+				var capture_phase_names := ["EXPLORE", "OBJECTIVE", "BOSS", "EXTRACTION"]
+				var capture_phase = capture_phase_names[clampi(video_capture_expedition_phase, 0, capture_phase_names.size() - 1)]
+				_mecha_select_status.text = "VIDEO CAPTURE  DECK %d  %s  %02d:%02d      LEFT RIGHT SELECT      ENTER A DEPLOY" % [
+					clampi(video_capture_expedition_deck, 1, EXPEDITION_DECK_COUNT),
+					capture_phase,
+					int(video_capture_start_minutes),
+					int(round(fmod(video_capture_start_minutes, 1.0) * 60.0))
+				]
+			else:
+				_mecha_select_status.text = "VIDEO CAPTURE  %02d:%02d      LEFT RIGHT SELECT      ENTER A DEPLOY" % [
+					int(video_capture_start_minutes),
+					int(round(fmod(video_capture_start_minutes, 1.0) * 60.0))
+				]
 		else:
 			_mecha_select_status.text = "LEFT RIGHT   SELECT      ENTER A   DEPLOY"
 	if _mecha_select_overlay != null:
@@ -860,11 +879,10 @@ func _start_selected_run() -> void:
 		call_deferred("_apply_video_capture_state")
 
 func _apply_video_capture_state() -> void:
-	# Stage a believable run state for recording. The clock, deck, enemy pressure,
-	# secondary unlock and EVERY level-up choice accumulated by the requested time
-	# advance together. Ability evolution is deliberately protected from generic
-	# stat choices so capture mode cannot accidentally show an under-developed
-	# chassis at a late timestamp.
+	# Stage a believable run state for recording. In Expedition mode the selected
+	# deck and objective phase are authoritative; elapsed minutes are now used for
+	# build strength and enemy pressure only. Legacy survival capture keeps its
+	# original time-to-deck behavior.
 	get_tree().paused = false
 	_game_over = false
 	_run_complete = false
@@ -874,11 +892,14 @@ func _apply_video_capture_state() -> void:
 	_run_time = clampf(requested_seconds, 0.0, RUN_DURATION - 1.0)
 
 	var palette_count := maxi(1, deck.get_deck_palette_count())
-	_deck_number = clampi(
-		int(floor(_run_time / DECK_DURATION)) + 1,
-		1,
-		palette_count
-	)
+	if expedition_mode:
+		_deck_number = clampi(video_capture_expedition_deck, 1, mini(EXPEDITION_DECK_COUNT, palette_count))
+	else:
+		_deck_number = clampi(
+			int(floor(_run_time / DECK_DURATION)) + 1,
+			1,
+			palette_count
+		)
 	_next_deck_time = minf(RUN_DURATION, float(_deck_number) * DECK_DURATION)
 
 	# Approximate a healthy run's number of salvage level-ups. The important part
@@ -903,16 +924,90 @@ func _apply_video_capture_state() -> void:
 		_apply_video_capture_omega(active, video_capture_start_minutes)
 		active.repair_hull(active.get_max_hull())
 
-	# generate_new_level() intentionally displays the deck banner during normal
-	# play. Hide it here so recording can begin on a clean gameplay frame.
+	# Reset enemy pressure only after the final deck generation has cleared the old
+	# population. The next frame then spawns around the staged capture location.
+	enemy_manager.prepare_video_capture_state(_run_time)
+	if expedition_mode:
+		_stage_video_capture_expedition(active)
+		# If this staged deck already includes its own earned Omega, mark that Core
+		# opportunity as consumed so the encounter director does not immediately
+		# generate a duplicate carrier after capture begins.
+		if (
+			video_capture_include_omega
+			and _deck_number <= 3
+			and _get_video_capture_expedition_objective_count() >= 1
+		):
+			enemy_manager.notify_omega_core_collected()
+
+	# Both deck generation and expedition-state setup can intentionally raise
+	# normal-play banners. Remove only those setup banners so the first captured
+	# frame is clean; entering the staged objective/Hive can still show its real UI.
 	if _banner_tween != null and _banner_tween.is_valid():
 		_banner_tween.kill()
 	deck_banner.hide()
-
-	enemy_manager.prepare_video_capture_state(_run_time)
-	if expedition_mode:
-		_reset_expedition_state()
 	_update_hud()
+
+func _get_video_capture_expedition_objective_count() -> int:
+	match clampi(video_capture_expedition_phase, 0, 3):
+		0:
+			return 0
+		1:
+			return clampi(video_capture_expedition_completed_objectives, 0, 3)
+		2, 3:
+			return EXPEDITION_OBJECTIVE_ROLES.size()
+	return 0
+
+func _stage_video_capture_expedition(active: MechaController) -> void:
+	_reset_expedition_state()
+
+	var completed_count := _get_video_capture_expedition_objective_count()
+	for i in range(completed_count):
+		var role := String(EXPEDITION_OBJECTIVE_ROLES[i])
+		_expedition_completed[role] = true
+		if _expedition_minimap != null:
+			var completed_room := deck.get_expedition_room(role)
+			var completed_room_index := int(completed_room.get("room_index", -1))
+			if completed_room_index >= 0:
+				_expedition_minimap.discover_room(completed_room_index)
+
+	var target_position := deck.spawn_position
+	var target_role := ""
+	match clampi(video_capture_expedition_phase, 0, 3):
+		1:
+			if completed_count < EXPEDITION_OBJECTIVE_ROLES.size():
+				target_role = String(EXPEDITION_OBJECTIVE_ROLES[completed_count])
+		2:
+			target_role = "HIVE"
+		3:
+			_expedition_boss_started = true
+			_expedition_boss_defeated = true
+			_expedition_extraction_unlocked = true
+			target_role = "EXTRACTION"
+
+	if not target_role.is_empty():
+		var target_room := deck.get_expedition_room(target_role)
+		if not target_room.is_empty():
+			target_position = target_room.get("center_world", target_position)
+
+	if active != null and is_instance_valid(active):
+		active.teleport_to(target_position)
+
+	if _expedition_minimap != null:
+		var target_room_index := deck.get_room_index_at_world(target_position)
+		if target_room_index >= 0:
+			_expedition_minimap.discover_room(target_room_index)
+		var target_cell := deck.world_to_cell(target_position)
+		_expedition_minimap.set_player_cell(target_cell)
+		_expedition_minimap.reveal_around(target_cell, 4)
+		_expedition_minimap.set_expedition_state(false, _expedition_extraction_unlocked)
+
+	# Force the first live frame to process entry into the staged room. This is what
+	# makes OBJECTIVE immediately demonstrate securing, BOSS spawn the Broodmother,
+	# and EXTRACTION trigger the real deck-transfer flow rather than a fake shortcut.
+	_expedition_current_room = -1
+	_expedition_secure_role = ""
+	_expedition_secure_progress = 0.0
+	_update_expedition_status()
 
 func _apply_video_capture_upgrades(active: MechaController, upgrade_budget: int, capture_minutes: float) -> void:
 	var budget := maxi(0, upgrade_budget)
@@ -997,16 +1092,25 @@ func _apply_video_capture_generic_upgrade(active: MechaController, choice_id: St
 			_salvage_magnet_radius = minf(220.0, _salvage_magnet_radius * 1.20)
 
 func _apply_video_capture_omega(active: MechaController, capture_minutes: float) -> void:
-	if not video_capture_include_omega or capture_minutes < video_capture_omega_minute:
+	if not video_capture_include_omega:
 		return
 
-	# Mirror the live three-Core progression in staged footage. With the default
-	# 03:00 start and 3-minute spacing, captures at 3/6/9+ minutes own 1/2/3 Omegas.
-	var target_count := clampi(
-		1 + int(floor((capture_minutes - video_capture_omega_minute) / 3.0)),
-		1,
-		active.get_omega_mutation_capacity()
-	)
+	var target_count := 0
+	if expedition_mode:
+		# Expedition grants one Core opportunity on Decks 1-3, activated only after
+		# the first objective on that deck. Previous deck Cores remain in the build.
+		var current_deck_earned := 1 if _get_video_capture_expedition_objective_count() >= 1 else 0
+		target_count = clampi((_deck_number - 1) + current_deck_earned, 0, 3)
+	else:
+		if capture_minutes < video_capture_omega_minute:
+			return
+		target_count = clampi(
+			1 + int(floor((capture_minutes - video_capture_omega_minute) / 3.0)),
+			1,
+			active.get_omega_mutation_capacity()
+		)
+
+	target_count = mini(target_count, active.get_omega_mutation_capacity())
 	var granted := 0
 	while granted < target_count and active.can_accept_omega_mutation():
 		var choices: Array = active.get_omega_mutation_choices()

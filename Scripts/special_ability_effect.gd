@@ -84,7 +84,7 @@ func _run() -> void:
 			if alternate:
 				await _r1_halo_sweep()
 			else:
-				await _r1_prism_lance()
+				await _r1_prism_understrike()
 		"R2":
 			if alternate:
 				await _r2_countershock()
@@ -1471,40 +1471,377 @@ func _m3_legendary_comet_corridor(base_direction: Vector2) -> void:
 		await _arc_shot_from(origin, dest, 58.0 + float(i) * 5.0, 0.105, Color(3.35, 1.45, 0.32, 1.0), Color(1.65, 0.35, 0.07, 1.0), 18.0 + float(i) * 1.2)
 		await _sleep(0.012)
 
-# R1 PRISM // PRISM LANCE
+# R1 PRISM // PRISM UNDERSTRIKE
+# PRISM is the inverse of HUNTER's dive attack. It designates remote deck space,
+# then refracted energy erupts upward from the surface at alternating isometric
+# angles. The mutation IDs remain unchanged because the upgrade system already
+# stores those string keys, but none of these behaviors use the old lance shot.
+func _r1_understrike_air_vector(index: int, tier: int, scale: float = 1.0) -> Vector2:
+	# Keep PRISM's diagonal breach silhouette compact. The strike should read as a
+	# violent eruption from the deck, not a full-height beam stretching off-screen.
+	var side := -1.0 if index % 2 == 0 else 1.0
+	var lateral := (
+		16.0
+		+ float(tier) * 2.0
+		+ float(index % 3) * 2.5
+	) * side
+	var rise := 44.0 + float((index + tier) % 3) * 5.0
+	return Vector2(lateral, -rise) * scale
+
+
+func _r1_targeted_strike_position(
+	aim_point: Vector2,
+	search_radius: float,
+	max_owner_range: float,
+	excluded_ids: Dictionary,
+	fallback: Vector2
+) -> Vector2:
+	# PRISM acquires targets the same way the roster's smart weapons do: prefer a
+	# live enemy near the aimed area, do not spend two simultaneous breaches on the
+	# same target, and preserve the authored pattern whenever no target is available.
+	var enemy := _nearest_unused_enemy(
+		aim_point,
+		search_radius,
+		max_owner_range,
+		excluded_ids
+	)
+
+	if enemy == null or not is_instance_valid(enemy):
+		return fallback.round()
+
+	var enemy_id := enemy.get_instance_id()
+	excluded_ids[enemy_id] = true
+	var enemy_position := enemy.global_position.round()
+
+	_show_target_lock(
+		enemy_position,
+		Color(1.45, 3.1, 3.45, 0.96),
+		Color(0.2, 0.92, 1.58, 0.72)
+	)
+
+	return enemy_position
+
+
+func _r1_prism_understrike_at(
+	at: Vector2,
+	air_vector: Vector2,
+	tier: int,
+	impact_radius: float,
+	play_sound: bool = false,
+	heavy: bool = false
+) -> void:
+	var strike_at := at.round()
+	var core := Color(1.05, 2.95, 3.35, 1.0)
+	var glow := Color(0.2, 0.92, 1.55, 1.0)
+	var trail_glow := Color(0.16, 0.76, 1.45, 0.24)
+
+	# Defensive clamp keeps every base/OMEGA variant inside the same compact visual
+	# language, including older callers that still pass one of the taller vectors.
+	var render_vector := air_vector * 0.78
+	var max_render_length := 48.0 + (8.0 if heavy else 0.0)
+	if render_vector.length() > max_render_length:
+		render_vector = render_vector.normalized() * max_render_length
+	var rise_end := (strike_at + render_vector).round()
+
+	# The tell is deliberately tiny: enough to read the impact point without
+	# turning a rapid primary into a slow telegraphed bombardment.
+	_pulse_ring(
+		strike_at,
+		7.0 + float(tier) * 0.8 + (2.0 if heavy else 0.0),
+		Color(1.55, 3.2, 3.45, 0.95),
+		Color(0.2, 0.95, 1.6, 0.18),
+		0.10,
+		12
+	)
+
+	# Damage lives on the deck contact point. The rising streak is aerial VFX only,
+	# so enemies are never damaged simply because their screen sprite overlaps it.
+	_ability_impact_fx(
+		strike_at,
+		core,
+		glow,
+		impact_radius + (2.0 if heavy else 0.0),
+		play_sound
+	)
+
+	var push_dir := (strike_at - owner_ground).normalized()
+	if push_dir.length_squared() <= 0.001:
+		push_dir = direction
+	if push_dir.length_squared() <= 0.001:
+		push_dir = Vector2.RIGHT
+
+	_damage_radius(
+		strike_at,
+		impact_radius + (1.5 if heavy else 0.0),
+		push_dir
+	)
+
+	_spark_pixels(
+		strike_at,
+		Color(1.65, 3.1, 3.4, 1.0),
+		glow,
+		(5 + tier) + (3 if heavy else 0),
+		14.0 + float(tier) * 2.0 + (5.0 if heavy else 0.0),
+		0.18
+	)
+
+	var head := ProjectileFxScript.new() as SpacehaulSpecialProjectile
+	root.add_child(head)
+	head.setup(
+		strike_at,
+		core,
+		glow,
+		1.0 + (0.15 if heavy else 0.0),
+		true
+	)
+	_set_fx_depth(head, strike_at, 1)
+
+	var rise_time := 0.082 + (0.018 if heavy else 0.0)
+	_spawn_follow_particles(
+		head,
+		core,
+		glow,
+		rise_time + 0.07,
+		70.0 + float(tier) * 4.0 + (10.0 if heavy else 0.0)
+	)
+
+	# Build the streak manually so its visual endpoint can rise into the air while
+	# every segment remains depth-sorted from the same deck footprint.
+	var streak := _line(
+		strike_at,
+		strike_at,
+		Color(core.r, core.g, core.b, 0.92),
+		trail_glow
+	)
+
+	var steps := 7
+	for step in range(steps):
+		var t := float(step + 1) / float(steps)
+		var rise_t := 1.0 - pow(1.0 - t, 3.0)
+		var p := strike_at.lerp(rise_end, rise_t).round()
+
+		if is_instance_valid(head):
+			head.global_position = p
+			_set_fx_depth(head, strike_at, 1)
+
+		if is_instance_valid(streak):
+			_refresh_depth_polyline_with_depth(
+				streak,
+				PackedVector2Array([strike_at, p]),
+				Color(core.r, core.g, core.b, 0.92),
+				trail_glow,
+				PackedVector2Array([strike_at, strike_at])
+			)
+
+		await _sleep(rise_time / float(steps))
+
+	if heavy:
+		_pulse_ring(
+			strike_at,
+			18.0 + float(tier) * 2.0,
+			Color(1.7, 3.3, 3.5, 0.96),
+			Color(0.2, 1.0, 1.65, 0.20),
+			0.12,
+			20
+		)
+
+	# Let the finished eruption hang for a beat before it disappears. This gives
+	# the player time to read which enemy was struck while keeping the attack fast.
+	var visual_hold := 1.105 + (0.035 if heavy else 0.0)
+
+	if is_instance_valid(head):
+		var head_tween := root.create_tween()
+		head_tween.tween_interval(visual_hold)
+		head_tween.tween_property(head, "modulate:a", 0.0, 0.065)
+		head_tween.tween_callback(head.queue_free)
+
+	if is_instance_valid(streak):
+		var streak_tween := root.create_tween()
+		streak_tween.tween_interval(visual_hold)
+		streak_tween.tween_property(
+			streak,
+			"modulate:a",
+			0.0,
+			0.095 if not heavy else 0.12
+		)
+		streak_tween.tween_callback(streak.queue_free)
+
+
 func _r1_legendary_prism_wall(base_direction: Vector2) -> void:
-	for i in range(11):
-		var offset := (float(i) - 5.0) * 8.0
-		var lateral := IsoVfx.ground_perpendicular_offset(base_direction, offset)
-		var start := (origin + lateral).round()
-		var end := (start + IsoVfx.ground_vector(base_direction, 244.0)).round()
-		await _straight_shot_from(start, end, Color(1.35, 3.25, 3.5, 1.0), Color(0.2, 1.0, 1.65, 1.0), 0.042, 10.0)
-	_pulse_ring(owner_ground + IsoVfx.ground_vector(base_direction, 220.0), 30.0, Color(1.7, 3.4, 3.55, 1.0), Color(0.2, 1.0, 1.6, 0.22), 0.14, 24)
+	var center := _target_clamped(252.0)
+	var core := Color(1.35, 3.25, 3.5, 1.0)
+	var glow := Color(0.2, 1.0, 1.65, 1.0)
+	_show_target_lock(center, core, glow)
+
+	# A transverse curtain of upward eruptions. It keeps the mutation's wall idea,
+	# but the wall is now created by deck strikes instead of forward beam fire.
+	var count := 9
+	var targeted_ids: Dictionary = {}
+	for i in range(count):
+		var f := float(i) / float(count - 1) - 0.5
+		var fallback := (
+			center
+			+ IsoVfx.ground_perpendicular_offset(base_direction, f * 112.0)
+			+ IsoVfx.ground_vector(base_direction, absf(f) * 12.0)
+		).round()
+		var strike_at := _r1_targeted_strike_position(
+			fallback,
+			86.0,
+			286.0,
+			targeted_ids,
+			fallback
+		)
+		await _r1_prism_understrike_at(
+			strike_at,
+			_r1_understrike_air_vector(i, 3, 1.08),
+			3,
+			12.0,
+			i == 0,
+			i == int(count / 2)
+		)
+		await _sleep(0.006)
+
+	_pulse_ring(
+		center,
+		58.0,
+		Color(1.7, 3.4, 3.55, 1.0),
+		Color(0.2, 1.0, 1.6, 0.22),
+		0.15,
+		30
+	)
+
 
 func _r1_legendary_kaleidoscope(base_direction: Vector2) -> void:
-	for i in range(12):
-		var aim := base_direction.rotated(TAU * float(i) / 12.0)
-		var end := (origin + IsoVfx.ground_vector(aim, 210.0)).round()
-		await _straight_shot_from(origin, end, Color(1.45, 3.15, 3.5, 1.0), Color(0.2, 0.95, 1.65, 1.0), 0.036, 11.0)
-	_pulse_ring(owner_ground, 106.0, Color(1.8, 3.4, 3.6, 1.0), Color(0.2, 1.0, 1.7, 0.25), 0.17, 36)
-	_radial_hit(owner_ground, 108.0, true)
+	var center := _target_clamped(236.0)
+	var core := Color(1.45, 3.15, 3.5, 1.0)
+	var glow := Color(0.2, 0.95, 1.65, 1.0)
+	_show_target_lock(center, core, glow)
+	_pulse_ring(center, 52.0, core, Color(glow.r, glow.g, glow.b, 0.20), 0.15, 28)
+
+	# Eight angled eruptions rotate around the designation, then the center punches
+	# upward last. The alternating air vectors make the silhouette refract rather
+	# than resemble HUNTER's parallel top-down dives.
+	var count := 8
+	var targeted_ids: Dictionary = {}
+	for i in range(count):
+		var angle := base_direction.angle() + TAU * float(i) / float(count)
+		var fallback := IsoVfx.ground_point(center, angle, 46.0).round()
+		var strike_at := _r1_targeted_strike_position(
+			fallback,
+			78.0,
+			276.0,
+			targeted_ids,
+			fallback
+		)
+		var radial_sign := -1.0 if i % 2 == 0 else 1.0
+		var air_vector := Vector2(
+			(18.0 + float(i % 3) * 2.5) * radial_sign,
+			-46.0 - float(i % 2) * 5.0
+		)
+		await _r1_prism_understrike_at(
+			strike_at,
+			air_vector,
+			3,
+			11.5,
+			i == 0,
+			false
+		)
+		await _sleep(0.004)
+
+	var center_strike := _r1_targeted_strike_position(
+		center,
+		92.0,
+		276.0,
+		targeted_ids,
+		center
+	)
+	await _r1_prism_understrike_at(
+		center_strike,
+		Vector2(0.0, -58.0),
+		3,
+		17.0,
+		false,
+		true
+	)
+	_radial_hit(center, 56.0, true)
+
 
 func _r1_legendary_refraction_engine(base_direction: Vector2) -> void:
-	var main_end := (origin + IsoVfx.ground_vector(base_direction, 278.0)).round()
-	var main := _line(origin, main_end, Color(1.65, 3.35, 3.6, 1.0), Color(0.22, 1.0, 1.7, 0.30))
-	_damage_line(origin, main_end, 7.0)
-	_fade_free(main, 0.24)
+	var center := _target_clamped(270.0)
+	var core := Color(1.65, 3.35, 3.6, 1.0)
+	var glow := Color(0.22, 1.0, 1.7, 1.0)
+	_show_target_lock(center, core, glow)
+	var targeted_ids: Dictionary = {}
+
+	# The engine opens on a real target whenever one is available, then refracts
+	# that event into nearby secondary breaches.
+	var opening_strike := _r1_targeted_strike_position(
+		center,
+		270.0,
+		270.0,
+		targeted_ids,
+		center
+	)
+	await _r1_prism_understrike_at(
+		opening_strike,
+		Vector2(0.0, -62.0),
+		3,
+		18.0,
+		true,
+		true
+	)
+
 	for stage in range(1, 4):
-		var node := origin.lerp(main_end, float(stage) / 4.0).round()
+		var stage_radius := 26.0 + float(stage) * 20.0
+		_pulse_ring(
+			center,
+			stage_radius,
+			Color(1.5, 3.2, 3.5, 0.92),
+			Color(0.2, 0.95, 1.6, 0.16),
+			0.11,
+			18 + stage * 4
+		)
+
 		for side in [-1.0, 1.0]:
-			var branch_dir := base_direction.rotated(side * (0.42 + float(stage) * 0.10))
-			var branch_end := (node + IsoVfx.ground_vector(branch_dir, 82.0 + float(stage) * 13.0)).round()
-			var branch := _line(node, branch_end, Color(1.4, 3.15, 3.5, 0.96), Color(0.2, 0.95, 1.6, 0.20))
-			_damage_line(node, branch_end, 5.0)
-			_explode(branch_end, Color(1.5, 3.2, 3.5, 1.0), Color(0.2, 0.95, 1.6, 1.0), 12.0, 11.0)
-			_fade_free(branch, 0.17)
-		await _sleep(0.025)
-	_explode(main_end, Color(1.9, 3.5, 3.65, 1.0), Color(0.22, 1.0, 1.7, 1.0), 26.0, 24.0)
+			var lateral := IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				side * stage_radius
+			)
+			var forward := IsoVfx.ground_vector(
+				base_direction,
+				float(stage - 1) * 12.0
+			)
+			var fallback := (center + lateral + forward).round()
+			var strike_at := _r1_targeted_strike_position(
+				fallback,
+				82.0 + float(stage) * 6.0,
+				294.0,
+				targeted_ids,
+				fallback
+			)
+			var air_vector := Vector2(
+				-side * (21.0 + float(stage) * 2.5),
+				-48.0 - float(stage) * 4.0
+			)
+			await _r1_prism_understrike_at(
+				strike_at,
+				air_vector,
+				3,
+				12.0 + float(stage),
+				false,
+				stage == 3
+			)
+
+		await _sleep(0.012)
+
+	_pulse_ring(
+		center,
+		90.0,
+		Color(1.9, 3.5, 3.65, 1.0),
+		Color(0.22, 1.0, 1.7, 0.22),
+		0.18,
+		40
+	)
 
 # R2 BREACHER // BREACH CANNON
 func _r2_legendary_rail_annihilator(base_direction: Vector2) -> void:
@@ -2521,11 +2858,11 @@ func _radial_explosion_field(
 		await _sleep(0.022)
 
 
-# R1 PRIMARY: PRISM LANCE
-# A projected refracting salvo. The original lance count/range progression is
-# preserved, but each lance now physically travels across the deck and the fan
-# opens slightly as tiers are added.
-func _r1_prism_lance() -> void:
+# R1 PRIMARY: PRISM UNDERSTRIKE
+# A cursor-designated refractive strike field. Unlike HUNTER, nothing launches
+# from the chassis and nothing dives from the sky: PRISM energy breaches the deck
+# at the target area and rises outward at sharp isometric angles.
+func _r1_prism_understrike() -> void:
 	var tier := primary_tier
 	var base_direction := direction
 	match legendary_mutation:
@@ -2538,124 +2875,89 @@ func _r1_prism_lance() -> void:
 		"refraction_engine":
 			await _r1_legendary_refraction_engine(base_direction)
 			return
-	var lance_count := 3 + tier
-	var reach := 184.0 + float(tier) * 14.0
-	var fan_width := deg_to_rad(8.0 + float(tier) * 2.0)
 
-	var core := Color(0.85, 2.8, 3.25, 1.0)
-	var glow := Color(0.18, 0.9, 1.5, 0.25)
-	var impact_core := Color(1.1, 2.9, 3.3, 1.0)
-	var impact_glow := Color(0.2, 0.9, 1.5, 1.0)
+	var strike_count := 3 + tier
+	var max_range := 206.0 + float(tier) * 14.0
+	var spread := 42.0 + float(tier) * 8.0
+	var center := _target_clamped(max_range)
+	var core := Color(1.05, 2.95, 3.35, 1.0)
+	var glow := Color(0.2, 0.92, 1.55, 1.0)
 
-	var starts: Array[Vector2] = []
-	var ends: Array[Vector2] = []
-	var heads: Array[Node2D] = []
-	var beams: Array[Node2D] = []
+	_show_target_lock(center, core, glow)
+	var targeted_ids: Dictionary = {}
 
-	for i in range(lance_count):
-		var f := 0.0 if lance_count == 1 else (
-			float(i) / float(lance_count - 1) - 0.5
-		)
-
-		var lateral := IsoVfx.ground_perpendicular_offset(
-			direction,
-			f * 10.0
-		)
-
-		var start := (origin + lateral).round()
-		var end := (
-			start
-			+ IsoVfx.ground_vector(
-				direction,
-				reach,
-				f * fan_width
-			)
-		).round()
-
-		starts.append(start)
-		ends.append(end)
-
-		var head := ProjectileFxScript.new() as SpacehaulSpecialProjectile
-		root.add_child(head)
-		head.setup(
-			start,
+	if tier >= 1:
+		_pulse_ring(
+			center,
+			spread * 0.62,
 			core,
-			Color(0.2, 1.0, 1.55, 1.0),
-			1.0,
+			Color(glow.r, glow.g, glow.b, 0.15),
+			0.12,
+			18 + tier * 4
+		)
+
+	for i in range(strike_count):
+		var f := 0.0 if strike_count == 1 else (
+			float(i) / float(strike_count - 1) - 0.5
+		)
+		var lateral := IsoVfx.ground_perpendicular_offset(
+			base_direction,
+			f * spread
+		)
+		var stagger_forward := (
+			float((i % 3) - 1)
+			* (8.0 + float(tier) * 1.5)
+		)
+		var forward := IsoVfx.ground_vector(
+			base_direction,
+			stagger_forward
+		)
+		var fallback := (center + lateral + forward).round()
+		var strike_at := _r1_targeted_strike_position(
+			center,
+			max_range,
+			max_range,
+			targeted_ids,
+			fallback
+		)
+
+		await _r1_prism_understrike_at(
+			strike_at,
+			_r1_understrike_air_vector(i, tier),
+			tier,
+			10.0 + float(tier) * 1.25,
+			i == 0,
+			false
+		)
+
+		await _sleep(maxf(0.002, 0.012 - float(tier) * 0.002))
+
+	# Tier III keeps the old primary's "something extra at the end" cadence, but
+	# replaces its cross-lance burst with one heavy central breach from the opposite
+	# angle. This makes the max tier read as a converging strike pattern.
+	if tier >= 3:
+		await _sleep(0.018)
+		var finisher_at := _r1_targeted_strike_position(
+			center,
+			max_range,
+			max_range,
+			targeted_ids,
+			center
+		)
+		await _r1_prism_understrike_at(
+			finisher_at,
+			Vector2(-24.0 if strike_count % 2 == 0 else 24.0, -58.0),
+			tier,
+			16.0,
+			false,
 			true
 		)
-		_set_fx_depth(head, start, 1)
-		_spawn_follow_particles(head, core, impact_glow, 0.24, 46.0)
-		heads.append(head)
 
-		var beam := _line(start, start, core, glow)
-		beams.append(beam)
 
-	var travel_time := maxf(0.13, 0.20 - float(tier) * 0.012)
-	var steps := 10
-
-	for step in range(steps):
-		var t := float(step + 1) / float(steps)
-		var travel_t := 1.0 - pow(1.0 - t, 2.0)
-
-		for i in range(ends.size()):
-			var current := starts[i].lerp(ends[i], travel_t).round()
-
-			if i < heads.size() and is_instance_valid(heads[i]):
-				heads[i].global_position = current
-				_set_fx_depth(heads[i], current, 1)
-
-			if i < beams.size() and is_instance_valid(beams[i]):
-				_update_depth_line_endpoint(beams[i], current)
-
-		await _sleep(travel_time / float(steps))
-
-	for i in range(ends.size()):
-		var start := starts[i]
-		var end := ends[i]
-
-		_damage_line(
-			start,
-			end,
-			3.5 + float(tier) * 0.5
-		)
-
-		_explode(
-			end,
-			impact_core,
-			impact_glow,
-			9.0 + float(tier),
-			8.0 + float(tier)
-		)
-
-		# Max-tier refraction still produces the original cross burst, but now
-		# the cross is larger and accompanied by impact sparks.
-		if tier >= 3:
-			var cross_offset := IsoVfx.ground_perpendicular_offset(
-				direction,
-				11.0
-			)
-
-			var cross := _line(
-				end - cross_offset,
-				end + cross_offset,
-				Color(1.8, 3.1, 3.4, 0.9),
-				Color(0.2, 0.9, 1.5, 0.20)
-			)
-
-			_damage_line(
-				end - cross_offset,
-				end + cross_offset,
-				4.5
-			)
-
-			_fade_free(cross, 0.12)
-
-		if i < beams.size() and is_instance_valid(beams[i]):
-			_fade_free(beams[i], 0.15)
-
-		if i < heads.size() and is_instance_valid(heads[i]):
-			heads[i].queue_free()
+# Backward-compatible entry point for any older preview/debug code that still
+# invokes the former method directly. Gameplay now routes through UNDERSTRIKE.
+func _r1_prism_lance() -> void:
+	await _r1_prism_understrike()
 
 
 # R1 SECONDARY: HALO SWEEP
