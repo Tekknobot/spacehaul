@@ -1662,7 +1662,7 @@ func _r1_prism_understrike_at(
 			streak,
 			"modulate:a",
 			0.0,
-			0.095 if not heavy else 0.12
+			1.095 if not heavy else 1.12
 		)
 		streak_tween.tween_callback(streak.queue_free)
 
