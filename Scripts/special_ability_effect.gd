@@ -1399,46 +1399,58 @@ func _ability_impact_fx(
 # that attack with one of three geometry/rule-changing legendary behaviors.
 # -----------------------------------------------------------------------------
 
-# M2 PANTHER // VECTOR HARPOONS
+# M2 PANTHER // ION POUNCE TALONS
+# Mutation IDs remain unchanged for save/upgrade compatibility.
 func _m2_legendary_predator_grid(base_direction: Vector2) -> void:
 	var saved_direction := direction
-	for fan_angle in [-0.42, 0.0, 0.42]:
+	for fan_angle in [-0.38, 0.0, 0.38]:
 		direction = base_direction.rotated(float(fan_angle)).normalized()
-		var ends: Array[Vector2] = []
-		for i in range(5):
-			var f := float(i) / 4.0 - 0.5
-			ends.append((origin + IsoVfx.ground_vector(direction, 194.0, f * deg_to_rad(34.0))).round())
-		await _m2_project_vector_harpoons(ends, 3, 0.11)
-		await _sleep(0.018)
+		var ends := _m2_panther_target_positions(5, direction, 206.0, 52.0, 72.0)
+		await _m2_project_vector_harpoons(ends, 3, 0.115)
+		await _sleep(0.022)
 	direction = saved_direction
 	_pulse_ring(owner_ground, 54.0, Color(1.55, 3.2, 3.45, 1.0), Color(0.18, 1.0, 1.55, 0.24), 0.16, 28)
+
 
 func _m2_legendary_apex_reel(base_direction: Vector2) -> void:
 	var ends: Array[Vector2] = []
 	var count := 14
+	var used_ids: Dictionary = {}
+
 	for i in range(count):
 		var angle := base_direction.angle() + TAU * float(i) / float(count)
-		ends.append(IsoVfx.ground_point(owner_ground, angle, 154.0).round())
-	await _m2_project_vector_harpoons(ends, 3, 0.14)
+		var fallback := IsoVfx.ground_point(owner_ground, angle, 154.0).round()
+		var enemy := _nearest_unused_enemy(fallback, 58.0, 186.0, used_ids)
+
+		if enemy != null:
+			used_ids[enemy.get_instance_id()] = true
+			ends.append(enemy.global_position.round())
+		else:
+			ends.append(fallback)
+
+	await _m2_project_vector_harpoons(ends, 3, 0.145)
 	_pulse_ring(owner_ground, 154.0, Color(1.45, 3.05, 3.4, 1.0), Color(0.2, 0.9, 1.6, 0.24), 0.15, 40)
 	_radial_hit(owner_ground, 160.0, false)
 	await _sleep(0.05)
 	_explode(owner_ground, Color(2.0, 3.35, 3.5, 1.0), Color(0.2, 1.0, 1.65, 1.0), 30.0, 34.0)
 
+
 func _m2_legendary_kill_lattice(base_direction: Vector2) -> void:
-	var ends: Array[Vector2] = []
-	for i in range(9):
-		var f := float(i) / 8.0 - 0.5
-		ends.append((origin + IsoVfx.ground_vector(base_direction, 208.0, f * deg_to_rad(56.0))).round())
-	await _m2_project_vector_harpoons(ends, 3, 0.13)
+	var ends := _m2_panther_target_positions(9, base_direction, 218.0, 82.0, 82.0)
+	await _m2_project_vector_harpoons(ends, 3, 0.135)
+
 	for stage in range(4):
 		var t := 1.0 - float(stage) * 0.22
 		for end in ends:
-			var at := origin.lerp(end, t).round()
+			var at := owner_ground.lerp(end, t).round()
+			_m2_talon_rake(at, 3, stage)
 			_ability_impact_fx(at, Color(1.45, 3.1, 3.4, 1.0), Color(0.18, 0.95, 1.55, 1.0), 7.0 + float(stage))
-			if stage == 2:
-				_damage_line(end, origin, 5.0)
-		await _sleep(0.028)
+			var push := (at - owner_ground).normalized()
+			if push.length_squared() <= 0.001:
+				push = base_direction
+			_damage_radius(at, 8.0 + float(stage) * 1.5, push)
+		await _sleep(0.032)
+
 	_explode(owner_ground, Color(1.8, 3.3, 3.5, 1.0), Color(0.2, 1.0, 1.6, 1.0), 25.0, 28.0)
 
 # M3 COMET // COMET MORTAR
@@ -2237,9 +2249,68 @@ func _m1_repulsor_burst() -> void:
 			_explode(end, Color(1.8, 3.0, 3.2, 1.0), Color(0.25, 1.0, 1.5, 1.0), 9.0, 10.0)
 		await _sleep(0.08)
 
-# M2 PRIMARY: VECTOR HARPOONS
-# Panther now physically projects its tether heads across the isometric deck.
-# The original fan count, spread, reach, line damage and endpoint impacts remain intact.
+# M2 PRIMARY: ION POUNCE TALONS
+# Panther now launches compact ion talons that bound through visible height,
+# curve laterally over the isometric deck, and hook down onto enemies near aim.
+# Old function names remain so external callers and OMEGA hooks stay compatible.
+func _m2_panther_target_positions(
+	count: int,
+	base_direction: Vector2,
+	reach: float,
+	spread_width: float,
+	search_radius: float
+) -> Array[Vector2]:
+	var results: Array[Vector2] = []
+	var used_ids: Dictionary = {}
+	var safe_count := maxi(1, count)
+	var aim_center := _target_clamped(reach)
+
+	for i in range(safe_count):
+		var f := 0.0 if safe_count == 1 else float(i) / float(safe_count - 1) - 0.5
+		var slot := (
+			aim_center
+			+ IsoVfx.ground_perpendicular_offset(base_direction, f * spread_width)
+			+ IsoVfx.ground_vector(base_direction, absf(f) * 8.0)
+		).round()
+
+		var enemy := _nearest_unused_enemy(slot, search_radius, reach + 44.0, used_ids)
+		if enemy != null:
+			used_ids[enemy.get_instance_id()] = true
+			results.append(enemy.global_position.round())
+		else:
+			results.append(slot)
+
+	return results
+
+
+func _m2_talon_rake(at: Vector2, tier: int, variant_index: int = 0) -> void:
+	var core := Color(1.2, 3.0, 3.35, 1.0)
+	var glow := Color(0.18, 0.9, 1.5, 0.24)
+	var claw_count := 2 + (1 if tier >= 2 else 0)
+	var base_angle := direction.angle() + PI * 0.5 + float(variant_index % 3 - 1) * 0.12
+
+	for claw_index in range(claw_count):
+		var claw_offset := (float(claw_index) - float(claw_count - 1) * 0.5) * 4.0
+		var claw_center := (
+			at
+			+ IsoVfx.ground_perpendicular_offset(direction, claw_offset)
+		).round()
+
+		var points := PackedVector2Array()
+		var point_count := 6
+		for point_index in range(point_count):
+			var t := float(point_index) / float(point_count - 1)
+			var angle := base_angle + lerpf(-0.72, 0.66, t)
+			var radius := lerpf(13.0 + float(tier) * 1.6, 6.0 + float(tier) * 0.7, t)
+			points.append(IsoVfx.ground_point(claw_center, angle, radius).round())
+
+		var rake := _polyline(points, core, glow)
+		var rake_tween := root.create_tween()
+		rake_tween.tween_interval(0.07)
+		rake_tween.tween_property(rake, "modulate:a", 0.0, 0.13)
+		rake_tween.tween_callback(rake.queue_free)
+
+
 func _m2_project_vector_harpoons(
 	ends: Array[Vector2],
 	tier: int,
@@ -2249,85 +2320,141 @@ func _m2_project_vector_harpoons(
 		return
 
 	var core := Color(0.9, 2.8, 3.2, 1.0)
-	var glow := Color(0.15, 0.95, 1.45, 0.28)
+	var glow := Color(0.15, 0.95, 1.45, 1.0)
+	var trail_glow := Color(0.15, 0.95, 1.45, 0.24)
 	var impact_core := Color(1.2, 2.9, 3.2, 1.0)
 	var impact_glow := Color(0.2, 0.95, 1.4, 1.0)
-	var heads: Array[Node2D] = []
-	var tethers: Array[Node2D] = []
 
-	# Give every harpoon a visible projectile head with the same attached gas
-	# treatment used by the other floating special-ability pixels. Each cable is
-	# created once and its endpoint is extended as the head travels.
-	for _end in ends:
+	var heads: Array[Node2D] = []
+	var shadows: Array[Node2D] = []
+	var trails: Array[Node2D] = []
+	var visual_paths: Array[PackedVector2Array] = []
+	var depth_paths: Array[PackedVector2Array] = []
+	var curve_offsets: Array[float] = []
+	var arc_heights: Array[float] = []
+
+	var launch_offset := origin - owner_ground
+	var center_index := float(ends.size() - 1) * 0.5
+
+	for i in range(ends.size()):
 		var head := ProjectileFxScript.new() as SpacehaulSpecialProjectile
 		root.add_child(head)
-		head.setup(origin.round(), core, Color(0.2, 1.0, 1.55, 1.0), 1.0, true)
+		head.setup(origin.round(), core, glow, 1.0, true)
 		_set_fx_depth(head, owner_ground, 1)
+		_spawn_follow_particles(head, core, glow, travel_time + 0.10, 64.0 + float(tier) * 4.0)
 		heads.append(head)
 
-		var tether := _line(origin, origin, core, glow)
-		tethers.append(tether)
+		var shadow := _make_arc_ground_shadow(owner_ground)
+		shadows.append(shadow)
 
-	var steps := 11
+		var trail := Node2D.new()
+		trail.z_as_relative = false
+		trail.z_index = 0
+		root.add_child(trail)
+
+		var additive := CanvasItemMaterial.new()
+		additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+		trail.material = additive
+		trails.append(trail)
+
+		var visual_points := PackedVector2Array([origin.round()])
+		var depth_points := PackedVector2Array([owner_ground.round()])
+		visual_paths.append(visual_points)
+		depth_paths.append(depth_points)
+
+		var relative_index := float(i) - center_index
+		var side_sign := -1.0 if i % 2 == 0 else 1.0
+		curve_offsets.append(side_sign * (18.0 + absf(relative_index) * 3.2 + float(tier) * 1.5))
+		arc_heights.append(30.0 + float(tier) * 4.0 + absf(relative_index) * 2.5)
+
+	var steps := 13
 
 	for step in range(steps):
 		var t := float(step + 1) / float(steps)
-
-		# Slight ease-out gives the fan a launched/propelled feeling instead of
-		# simply drawing progressively longer lines at a constant rate.
-		var travel_t := 1.0 - pow(1.0 - t, 2.0)
+		var travel_t := t * t * (3.0 - 2.0 * t)
 
 		for i in range(ends.size()):
-			var current := origin.lerp(ends[i], travel_t).round()
+			var end := ends[i]
+			var ground_start := owner_ground
+			var ground_delta := end - ground_start
+			var ground_direction := direction
+			if ground_delta.length_squared() > 0.001:
+				ground_direction = ground_delta.normalized()
+
+			var control := (
+				ground_start.lerp(end, 0.48)
+				+ IsoVfx.ground_perpendicular_offset(ground_direction, curve_offsets[i])
+			)
+
+			var inv_t := 1.0 - travel_t
+			var ground_position := (
+				ground_start * inv_t * inv_t
+				+ control * 2.0 * inv_t * travel_t
+				+ end * travel_t * travel_t
+			).round()
+
+			var height := sin(travel_t * PI) * arc_heights[i]
+			var visual_position := (
+				ground_position
+				+ launch_offset * (1.0 - travel_t)
+				+ Vector2(0.0, -height)
+			).round()
 
 			if i < heads.size() and is_instance_valid(heads[i]):
-				heads[i].global_position = current
-				_set_fx_depth(heads[i], current, 1)
+				heads[i].global_position = visual_position
+				_set_fx_depth(heads[i], ground_position, 1)
 
-			if i < tethers.size() and is_instance_valid(tethers[i]):
-				_update_depth_line_endpoint(tethers[i], current)
+			if i < shadows.size() and is_instance_valid(shadows[i]):
+				shadows[i].global_position = ground_position
+				_set_fx_depth(shadows[i], ground_position, -1)
+				var height_factor := sin(travel_t * PI)
+				shadows[i].scale = Vector2.ONE * lerpf(1.0, 0.56, height_factor)
+				shadows[i].modulate.a = lerpf(0.78, 0.28, height_factor)
+
+			var visual_points: PackedVector2Array = visual_paths[i]
+			var depth_points: PackedVector2Array = depth_paths[i]
+			visual_points.append(visual_position)
+			depth_points.append(ground_position)
+
+			if visual_points.size() > 9:
+				visual_points.remove_at(0)
+				depth_points.remove_at(0)
+
+			visual_paths[i] = visual_points
+			depth_paths[i] = depth_points
+
+			if i < trails.size() and is_instance_valid(trails[i]):
+				_refresh_depth_polyline_with_depth(
+					trails[i],
+					visual_points,
+					Color(core.r, core.g, core.b, 0.82),
+					trail_glow,
+					depth_points
+				)
 
 		await _sleep(travel_time / float(steps))
 
-	# Resolve the original Vector Harpoon gameplay only once the heads reach
-	# their destinations. Each tether still damages along its complete path.
 	for i in range(ends.size()):
 		var end := ends[i]
-
-		_damage_line(
-			origin,
-			end,
-			4.0 + float(tier)
-		)
-
-		# Restore path particles at full extension; the growing cable itself does
-		# not repeatedly spawn emitters during its travel.
-		_spawn_path_particles(
-			PackedVector2Array([origin.round(), end.round()]),
-			core,
-			glow,
-			clampi(int(round(origin.distance_to(end) / 42.0)), 3, 7),
-			0.20
-		)
-
-		_explode(
-			end,
-			impact_core,
-			impact_glow,
-			9.0 + float(tier),
-			10.0 + float(tier)
-		)
-
-		if i < tethers.size() and is_instance_valid(tethers[i]):
-			_fade_free(tethers[i], 0.18)
+		_m2_talon_rake(end, tier, i)
+		_explode(end, impact_core, impact_glow, 10.0 + float(tier), 11.0 + float(tier))
 
 		if i < heads.size() and is_instance_valid(heads[i]):
 			heads[i].queue_free()
+		if i < shadows.size() and is_instance_valid(shadows[i]):
+			shadows[i].queue_free()
+
+		if i < trails.size() and is_instance_valid(trails[i]):
+			var trail_tween := root.create_tween()
+			trail_tween.tween_interval(0.055)
+			trail_tween.tween_property(trails[i], "modulate:a", 0.0, 0.12)
+			trail_tween.tween_callback(trails[i].queue_free)
 
 
 func _m2_vector_harpoons() -> void:
 	var tier := primary_tier
 	var base_direction := direction
+
 	match legendary_mutation:
 		"predator_grid":
 			await _m2_legendary_predator_grid(base_direction)
@@ -2339,30 +2466,22 @@ func _m2_vector_harpoons() -> void:
 			await _m2_legendary_kill_lattice(base_direction)
 			return
 
-	# Preserve Panther's existing upgrade structure:
-	# T0 = 3, T1 = 5, T2 = 7, T3 = 9 projected harpoons.
-	var bolt_count := 3 + tier * 2
-	var total_spread := deg_to_rad(24.0 + float(tier) * 4.0)
-	var reach := 158.0 + float(tier) * 12.0
-	var ends: Array[Vector2] = []
+	var talon_count := 3 + tier * 2
+	var reach := 166.0 + float(tier) * 12.0
+	var spread_width := 42.0 + float(tier) * 10.0
+	var search_radius := 58.0 + float(tier) * 7.0
 
-	for i in range(bolt_count):
-		var f := 0.0 if bolt_count == 1 else (
-			float(i) / float(bolt_count - 1) - 0.5
-		)
+	var ends := _m2_panther_target_positions(
+		talon_count,
+		base_direction,
+		reach,
+		spread_width,
+		search_radius
+	)
 
-		var bolt_offset := IsoVfx.ground_vector(
-			direction,
-			reach,
-			f * total_spread
-		)
-
-		ends.append((origin + bolt_offset).round())
-
-	# Higher tiers project a larger fan, but keep the same fast Panther cadence.
-	var travel_time := maxf(0.14, 0.21 - float(tier) * 0.012)
+	var travel_time := maxf(0.15, 0.225 - float(tier) * 0.014)
 	await _m2_project_vector_harpoons(ends, tier, travel_time)
-	await _sleep(0.04)
+	await _sleep(0.035)
 
 
 # M2 SECONDARY: ANCHOR BLOOM
