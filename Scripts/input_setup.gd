@@ -79,7 +79,6 @@ static func ensure_actions() -> void:
 	_add_joy_button("hurt_test", JOY_BUTTON_RIGHT_STICK)
 
 	_add_key("death_test", KEY_K)
-	_add_joy_button("death_test", JOY_BUTTON_START)
 
 	_add_key("respawn", KEY_R)
 

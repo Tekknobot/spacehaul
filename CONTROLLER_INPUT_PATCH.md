@@ -8,7 +8,7 @@ Target: Godot 4.6.2
 - Fresh deploys and paused UI confirmations now wait for held movement / combat inputs to return to neutral before player control resumes.
 - Mecha deployment is applied in world space after parenting, making spawn placement robust against manager transforms.
 - Controller attacks no longer fall back to a stale mouse position when the right stick is centered; the last valid right-stick aim is retained for controller-triggered combat.
-- Released stale GUI focus when returning to the chassis showroom so gamepad A consistently reaches DEPLOY.
+- Released stale GUI focus when returning to the chassis showroom so gamepad START consistently reaches DEPLOY.
 
 ## Input parity
 

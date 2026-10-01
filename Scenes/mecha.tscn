@@ -18,10 +18,33 @@ shape = SubResource("RectangleShape2D_mecha")
 [node name="ControlMarker" type="Node2D" parent="." unique_id=540291398]
 z_index = 100
 
-[node name="Arrow" type="Polygon2D" parent="ControlMarker" unique_id=329232328]
+[node name="AimVector" type="Node2D" parent="ControlMarker" unique_id=1298727240]
 position = Vector2(0, -43)
-color = Color(0.35, 0.9, 0.98, 1)
-polygon = PackedVector2Array(-5, -4, 5, -4, 0, 2)
+
+[node name="DepthFace" type="Polygon2D" parent="ControlMarker/AimVector" unique_id=147896041]
+visible = false
+color = Color(0.08, 0.29, 0.34, 0.82)
+polygon = PackedVector2Array(-8, -2, 5, -5, 11, 0, 10, 3, 5, -2, -7, 1)
+
+[node name="TopFace" type="Polygon2D" parent="ControlMarker/AimVector" unique_id=2088458481]
+color = Color(0.35, 0.9, 0.98, 0.24)
+polygon = PackedVector2Array(-8, -2, 3, -2, 3, -6, 11, 0, 3, 6, 3, 2, -8, 2)
+
+[node name="Outline" type="Line2D" parent="ControlMarker/AimVector" unique_id=1448201269]
+points = PackedVector2Array(-8, -2, 3, -2, 3, -6, 11, 0, 3, 6, 3, 2, -8, 2, -8, -2)
+width = 0.5
+default_color = Color(0.55, 0.96, 1, 0.96)
+
+[node name="Spine" type="Line2D" parent="ControlMarker/AimVector" unique_id=1571143056]
+points = PackedVector2Array(-8, 0, 3, 0, 11, 0)
+width = 0.5
+default_color = Color(0.78, 1, 1, 0.9)
+
+[node name="DepthEdge" type="Line2D" parent="ControlMarker/AimVector" unique_id=1861736439]
+visible = false
+points = PackedVector2Array(3, -3, 11, 2, 3, 7)
+width = 1.0
+default_color = Color(0.16, 0.56, 0.64, 0.9)
 
 [node name="Ring" type="Line2D" parent="ControlMarker" unique_id=1246181563]
 visible = false

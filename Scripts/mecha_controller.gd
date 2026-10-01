@@ -8,6 +8,7 @@ signal omega_primary_mode_changed(enabled: bool, display_name: String)
 const InputSetupScript = preload("res://Scripts/input_setup.gd")
 const SpecialAbilityScript = preload("res://Scripts/special_ability_effect.gd")
 const SFX = preload("res://Scripts/sound_fx.gd")
+const IsoVfx = preload("res://Scripts/isometric_vfx.gd")
 
 const GAMEPAD_AIM_DEADZONE := 0.28
 
@@ -142,6 +143,12 @@ const OMEGA_MUTATIONS := {
 @onready var animated_sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var camera: Camera2D = $Camera2D
 @onready var marker: Node2D = $ControlMarker
+@onready var aim_indicator: Node2D = $ControlMarker/AimVector
+@onready var aim_top_face: Polygon2D = $ControlMarker/AimVector/TopFace
+@onready var aim_depth_face: Polygon2D = $ControlMarker/AimVector/DepthFace
+@onready var aim_outline: Line2D = $ControlMarker/AimVector/Outline
+@onready var aim_spine: Line2D = $ControlMarker/AimVector/Spine
+@onready var aim_depth_edge: Line2D = $ControlMarker/AimVector/DepthEdge
 @onready var collision_shape: CollisionShape2D = $CollisionShape2D
 
 var is_player_controlled := false
@@ -183,6 +190,7 @@ var _camera_shake_time := 0.0
 var _camera_shake_strength := 0.0
 var _input_release_gate_actions: Array[StringName] = []
 var _last_gamepad_aim_direction := Vector2.RIGHT
+var _last_visual_aim_direction := Vector2.RIGHT
 
 func _ready() -> void:
 	add_to_group("mechas")
@@ -213,6 +221,7 @@ func _physics_process(delta: float) -> void:
 	_boost_cooldown_left = maxf(0.0, _boost_cooldown_left - delta)
 	_update_attack_state(delta)
 	_update_camera_shake(delta)
+	_update_aim_indicator()
 
 	if _hurt_time > 0.0:
 		_hurt_time = maxf(0.0, _hurt_time - delta)
@@ -256,9 +265,9 @@ func set_player_controlled(value: bool) -> void:
 		velocity = Vector2.ZERO
 
 func suppress_player_input_until_released(actions: Array[StringName]) -> void:
-	# Menu/UI confirmation can share physical inputs with combat (notably gamepad
-	# A = DEPLOY and A = BOOST, plus LMB = UI click and LMB = PRIMARY). Godot's
-	# handled-event flag does not clear InputMap state, so hold gameplay until the
+	# Menu/UI confirmation can share physical inputs with combat (notably LMB =
+	# UI click and LMB = PRIMARY, or a held selection direction). Godot's handled-
+	# event flag does not clear InputMap state, so hold gameplay until the
 	# confirming control has actually returned to neutral.
 	_input_release_gate_actions.clear()
 	for action in actions:
@@ -598,6 +607,100 @@ func _update_attack_state(delta: float) -> void:
 		attacking = false
 		_attack_projectile_pending = false
 
+func _update_aim_indicator() -> void:
+	if aim_indicator == null or marker == null or not is_player_controlled:
+		return
+
+	# The pointer is a pure live aim readout: mouse position for keyboard/mouse and
+	# the right stick for controller. It follows player intent continuously rather
+	# than freezing to the previous shot while an attack animation resolves.
+	var direction := _get_attack_direction()
+	if direction.length_squared() <= 0.001:
+		direction = _last_visual_aim_direction
+	if direction.length_squared() <= 0.001:
+		direction = Vector2.RIGHT
+
+	_last_visual_aim_direction = direction.normalized()
+	_update_isometric_aim_vector(_last_visual_aim_direction)
+
+func _update_isometric_aim_vector(screen_direction: Vector2) -> void:
+	# This indicator is intentionally NOT one flat arrow rotated around its pivot.
+	# Every point is rebuilt in 2:1 ground space so the silhouette changes with
+	# depth: north/south aims compress, diagonals skew, and east/west aims read
+	# broader. The result lives in the same perspective as the 64x32 deck tiles.
+	var direction := screen_direction.normalized()
+	if direction.length_squared() <= 0.001:
+		direction = Vector2.RIGHT
+
+	# A logical 25 px ground-space arrow. ground_vector() performs the inverse /
+	# re-projection needed to preserve the actual attack direction while changing
+	# its apparent screen-space length according to isometric depth.
+	var forward := IsoVfx.ground_vector(direction, 25.0)
+	var shoulder := forward * 0.30
+	var tip := forward * 0.66
+	var tail := -forward * 0.34
+
+	# The perpendicular is projected independently instead of being a simple
+	# screen-space 90-degree vector. This makes the arrow head shear and narrow as
+	# it turns through the isometric plane rather than looking like a rotated HUD icon.
+	var shaft_half := IsoVfx.ground_perpendicular_offset(direction, 2.2)
+	var head_half := IsoVfx.ground_perpendicular_offset(direction, 5.8)
+	var neck_left := shoulder + shaft_half
+	var neck_right := shoulder - shaft_half
+	var head_left := shoulder + head_half
+	var head_right := shoulder - head_half
+	var tail_left := tail + shaft_half
+	var tail_right := tail - shaft_half
+
+	var top_points := PackedVector2Array([
+		tail_left,
+		neck_left,
+		head_left,
+		tip,
+		head_right,
+		neck_right,
+		tail_right,
+	])
+	aim_top_face.polygon = top_points
+
+	# A small downward extrusion gives the vector a visible side / lower plane.
+	# It grows subtly when aiming toward the camera (screen-down), and shifts
+	# sideways with X so the volume does not collapse into a uniform drop shadow.
+	var toward_camera := clampf(direction.y, -1.0, 1.0)
+	var depth_offset := Vector2(
+		-direction.x * 0.9,
+		2.0 + maxf(0.0, toward_camera) * 1.8 + absf(direction.x) * 0.35
+	)
+	var depth_points := PackedVector2Array([
+		head_left,
+		tip,
+		head_right,
+		head_right + depth_offset,
+		tip + depth_offset,
+		head_left + depth_offset,
+	])
+	aim_depth_face.polygon = depth_points
+
+	# Line2D carries the actual vector read. The outline and center spine stay crisp
+	# at pixel scale, while their points morph continuously with the projected faces.
+	var outline_points := PackedVector2Array([
+		tail_left,
+		neck_left,
+		head_left,
+		tip,
+		head_right,
+		neck_right,
+		tail_right,
+		tail_left,
+	])
+	aim_outline.points = outline_points
+	aim_spine.points = PackedVector2Array([tail, shoulder, tip])
+	aim_depth_edge.points = PackedVector2Array([head_left + depth_offset, tip + depth_offset, head_right + depth_offset])
+
+	# The whole vector floats just above the chassis. Its node never rotates; all
+	# directional information comes from the generated geometry above.
+	aim_indicator.rotation = 0.0
+
 func _process_player(delta: float) -> void:
 	if _is_player_input_release_gated():
 		velocity = Vector2.ZERO
@@ -918,7 +1021,7 @@ func _get_attack_target(attack_dir: Vector2) -> Vector2:
 		var stick := _read_gamepad_aim(joy_id)
 		if stick.length_squared() > 0.0:
 			return global_position + Vector2(0.0, -18.0) + stick * 220.0
-		if _is_gamepad_combat_input_active(joy_id):
+		if _is_gamepad_aim_mode_active(joy_id):
 			var retained := _last_gamepad_aim_direction
 			if retained.length_squared() <= 0.001:
 				retained = last_move_direction
@@ -937,7 +1040,7 @@ func _get_attack_direction() -> Vector2:
 		var stick := _read_gamepad_aim(joy_id)
 		if stick.length_squared() > 0.0:
 			return stick
-		if _is_gamepad_combat_input_active(joy_id):
+		if _is_gamepad_aim_mode_active(joy_id):
 			if _last_gamepad_aim_direction.length_squared() > 0.001:
 				return _last_gamepad_aim_direction.normalized()
 			if last_move_direction.length_squared() > 0.001:
@@ -958,6 +1061,14 @@ func _read_gamepad_aim(joy_id: int) -> Vector2:
 		return Vector2.ZERO
 	_last_gamepad_aim_direction = stick.normalized()
 	return _last_gamepad_aim_direction
+
+func _is_gamepad_aim_mode_active(joy_id: int) -> bool:
+	# TestWorld owns the authoritative last-used-device state so a connected but
+	# idle mouse cannot steal aim from a controller with a centered right stick.
+	var root := get_tree().current_scene if get_tree() != null else null
+	if root != null and root.has_method("is_using_gamepad"):
+		return bool(root.call("is_using_gamepad"))
+	return _is_gamepad_combat_input_active(joy_id)
 
 func _is_gamepad_combat_input_active(joy_id: int) -> bool:
 	# Distinguish controller-triggered attacks from mouse clicks when both devices

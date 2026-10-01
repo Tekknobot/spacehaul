@@ -58,9 +58,16 @@ func _spawn_single_mecha(chosen_id: String) -> void:
 func relocate_after_deck_regeneration() -> void:
 	if active_mecha == null or not is_instance_valid(active_mecha):
 		return
-	active_mecha.teleport_to(deck.spawn_position)
+	snap_active_mecha_to_spawn()
 	active_mecha.set_player_controlled(true)
 	active_mecha_changed.emit(active_mecha)
+
+func snap_active_mecha_to_spawn() -> void:
+	# Single authoritative deck spawn operation used after scene/deck lifecycle
+	# boundaries. teleport_to() also clears velocity/attack carry-over.
+	if active_mecha == null or not is_instance_valid(active_mecha):
+		return
+	active_mecha.teleport_to(deck.spawn_position)
 
 func get_active_animation_name() -> String:
 	if active_mecha == null or not is_instance_valid(active_mecha):

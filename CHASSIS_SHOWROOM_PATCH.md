@@ -5,7 +5,7 @@
 - Center stage uses the real animated MechaController sprite and authored idle/attack frames.
 - Left/right arrows and keyboard/gamepad movement cycle the roster with wrapping.
 - Neighboring chassis names are shown faintly beside the carousel arrows.
-- ENTER / gamepad A / DEPLOY button starts the selected chassis.
+- ENTER / gamepad START / DEPLOY button starts the selected chassis.
 - Selected chassis displays its base LMB and RMB names beneath the live preview.
 
 ## Live Tier-0 combat demonstration

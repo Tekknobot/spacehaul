@@ -132,6 +132,7 @@ var _showroom_active := false
 var _selected_mecha_id := "M1"
 var _menu_open := false
 var _using_gamepad := false
+var _deploy_request_pending := false
 
 func _enter_tree() -> void:
 	add_to_group("survival_manager")
@@ -246,19 +247,19 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	# The showroom uses the same left/right language as gameplay movement, but only
-	# while the full-screen selector is active. ENTER / gamepad A deploys the
+	# while the full-screen selector is active. ENTER / gamepad START deploys the
 	# currently centered chassis; mouse users can click the arrows or DEPLOY.
 	if _showroom_active and _mecha_select_overlay != null and _mecha_select_overlay.visible:
 		if event is InputEventKey:
 			var menu_key := event as InputEventKey
 			if menu_key.pressed and not menu_key.echo and (menu_key.keycode == KEY_ENTER or menu_key.keycode == KEY_KP_ENTER):
-				_start_selected_run()
+				_request_selected_run_deploy()
 				get_viewport().set_input_as_handled()
 				return
 		if event is InputEventJoypadButton:
 			var menu_button := event as InputEventJoypadButton
-			if menu_button.pressed and menu_button.button_index == JOY_BUTTON_A:
-				_start_selected_run()
+			if menu_button.pressed and menu_button.button_index == JOY_BUTTON_START:
+				_request_selected_run_deploy()
 				get_viewport().set_input_as_handled()
 				return
 
@@ -286,6 +287,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif key_event.keycode == KEY_3:
 			if omega_open: _choose_omega_mutation(2)
 			else: _choose_upgrade(2)
+
+func is_using_gamepad() -> bool:
+	return _using_gamepad
 
 func get_run_time() -> float:
 	return _run_time
@@ -607,7 +611,7 @@ func _build_mecha_select_overlay() -> void:
 	deploy_hover.border_color = Color(0.42, 0.56, 0.58, 0.90)
 	_mecha_select_deploy.add_theme_stylebox_override("hover", deploy_hover)
 	_mecha_select_deploy.add_theme_stylebox_override("pressed", deploy_style)
-	_mecha_select_deploy.pressed.connect(_start_selected_run)
+	_mecha_select_deploy.pressed.connect(_request_selected_run_deploy)
 	root_box.add_child(_mecha_select_deploy)
 
 	_mecha_select_status = Label.new()
@@ -714,12 +718,12 @@ func _refresh_mecha_ability_prompts() -> void:
 	if _mecha_select_secondary != null:
 		_mecha_select_secondary.text = "%s   %s" % [_secondary_input_prompt(), String(abilities.get("secondary", "SECONDARY"))]
 	if _mecha_select_deploy != null:
-		_mecha_select_deploy.text = "A DEPLOY" if _using_gamepad else "DEPLOY"
+		_mecha_select_deploy.text = "START DEPLOY" if _using_gamepad else "DEPLOY"
 
 func _refresh_mecha_select_status() -> void:
 	if _mecha_select_status == null:
 		return
-	var navigation_hint := "L STICK / DPAD SELECT      A DEPLOY" if _using_gamepad else "LEFT RIGHT SELECT      ENTER DEPLOY"
+	var navigation_hint := "L STICK / DPAD SELECT      START DEPLOY" if _using_gamepad else "LEFT RIGHT SELECT      ENTER DEPLOY"
 	if video_capture_mode:
 		if expedition_mode:
 			var capture_phase_names := ["EXPLORE", "OBJECTIVE", "BOSS", "EXTRACTION"]
@@ -932,6 +936,9 @@ func _update_mecha_showroom(delta: float) -> void:
 				_showroom_demo_label.text = "PREVIEW"
 
 func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
+	_deploy_request_pending = false
+	if _mecha_select_deploy != null:
+		_mecha_select_deploy.disabled = false
 	_menu_open = true
 	get_tree().paused = true
 	enemy_manager.set_spawning_enabled(false)
@@ -944,8 +951,8 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 	if deck_banner != null:
 		deck_banner.hide()
 	_set_standard_hud_visible(false)
-	# A focused button from the run-summary/upgrade UI can consume gamepad A
-	# before _unhandled_input sees the showroom deploy press. The showroom uses
+	# A focused button from the run-summary/upgrade UI can retain GUI focus
+	# before the showroom receives controller navigation. The showroom uses
 	# explicit left/right selection, so it should start with no GUI focus owner.
 	get_viewport().gui_release_focus()
 	_refresh_mecha_select_status()
@@ -955,17 +962,41 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 		_select_mecha(_selected_mecha_id)
 
 func _start_selected_run() -> void:
+	# Compatibility wrapper for any older call sites. All deployment inputs now
+	# enter the same deferred lifecycle so mouse, keyboard and controller cannot
+	# create the gameplay tree at different points in Godot's input dispatch.
+	_request_selected_run_deploy()
+
+func _request_selected_run_deploy() -> void:
+	if _deploy_request_pending:
+		return
+	_deploy_request_pending = true
+	_showroom_active = false
+	if _mecha_select_deploy != null:
+		_mecha_select_deploy.disabled = true
+
+	# IMPORTANT: do not spawn directly from _unhandled_input(). A gamepad START
+	# event is still travelling through the viewport when that callback runs.
+	# Creating/unpausing the player there allows the brand-new gameplay tree to
+	# observe a different input/frame state than the GUI button path. Defer every
+	# deploy source to one common frame boundary instead.
+	call_deferred("_perform_selected_run_deploy")
+
+func _perform_selected_run_deploy() -> void:
+	# Keep gameplay paused for the entire deck rebuild + player creation. The menu
+	# itself processes ALWAYS, so this routine can safely finish setup before the
+	# first physics frame is allowed to touch the new mecha.
+	get_tree().paused = true
 	_showroom_active = false
 	_clear_showroom_fx()
 	if _showroom_mecha != null and is_instance_valid(_showroom_mecha):
 		_showroom_mecha.queue_free()
 	_showroom_mecha = null
-	_menu_open = false
-	get_tree().paused = false
 	if _mecha_select_overlay != null:
 		_mecha_select_overlay.hide()
 	if _run_summary_overlay != null:
 		_run_summary_overlay.hide()
+
 	_damage_intensity = 0.0
 	if _damage_material != null:
 		_damage_material.set_shader_parameter("intensity", 0.0)
@@ -986,12 +1017,12 @@ func _start_selected_run() -> void:
 	_omega_core_stored = false
 	if _omega_overlay != null:
 		_omega_overlay.hide()
+
 	if expedition_mode:
 		deck.configure_for_expedition_deck(_deck_number)
 	deck.set_deck_palette(_deck_number)
 	deck.generate_new_level()
 	mecha_manager.start_new_run_with_mecha(_selected_mecha_id)
-	_gate_active_mecha_after_ui_confirm()
 	enemy_manager.expedition_boss_controlled = expedition_mode
 	enemy_manager.reset_run()
 	_set_standard_hud_visible(true)
@@ -999,10 +1030,27 @@ func _start_selected_run() -> void:
 		_reset_expedition_state()
 	_update_hud()
 
+	# queue_free() and add_child() are intentionally allowed to cross one process
+	# frame while physics remains paused. This guarantees the old run/showroom
+	# objects are gone and the newly active chassis has completed _ready().
+	await get_tree().process_frame
+
+	var active := mecha_manager.get_active_mecha()
+	if active != null and is_instance_valid(active):
+		# Authoritative final placement. This is deliberately repeated after the
+		# frame boundary so controller deployment ends at exactly the same generated
+		# spawn point as mouse/keyboard deployment, with zero inherited velocity.
+		mecha_manager.snap_active_mecha_to_spawn()
+		_gate_active_mecha_after_ui_confirm()
+
+	_menu_open = false
+	_deploy_request_pending = false
+	if _mecha_select_deploy != null:
+		_mecha_select_deploy.disabled = false
+	get_tree().paused = false
+
 	# Stage the capture state only after the menu-selected chassis has actually
-	# been spawned. Deferred execution also lets the new mecha finish its normal
-	# _ready() setup before tiers, stats, Omega state and enemy pressure are applied.
-	# This path is used on first deploy and on any later re-deploy from the menu.
+	# been spawned and the common deploy lifecycle has completed.
 	if video_capture_mode:
 		call_deferred("_apply_video_capture_state")
 
