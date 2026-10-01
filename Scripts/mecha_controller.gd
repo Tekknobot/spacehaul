@@ -181,6 +181,8 @@ var _boost_direction := Vector2.RIGHT
 var _boost_trail_time := 0.0
 var _camera_shake_time := 0.0
 var _camera_shake_strength := 0.0
+var _input_release_gate_actions: Array[StringName] = []
+var _last_gamepad_aim_direction := Vector2.RIGHT
 
 func _ready() -> void:
 	add_to_group("mechas")
@@ -252,6 +254,25 @@ func set_player_controlled(value: bool) -> void:
 		if is_in_group("player_mecha"):
 			remove_from_group("player_mecha")
 		velocity = Vector2.ZERO
+
+func suppress_player_input_until_released(actions: Array[StringName]) -> void:
+	# Menu/UI confirmation can share physical inputs with combat (notably gamepad
+	# A = DEPLOY and A = BOOST, plus LMB = UI click and LMB = PRIMARY). Godot's
+	# handled-event flag does not clear InputMap state, so hold gameplay until the
+	# confirming control has actually returned to neutral.
+	_input_release_gate_actions.clear()
+	for action in actions:
+		if InputMap.has_action(action) and action not in _input_release_gate_actions:
+			_input_release_gate_actions.append(action)
+
+func _is_player_input_release_gated() -> bool:
+	if _input_release_gate_actions.is_empty():
+		return false
+	for action in _input_release_gate_actions:
+		if Input.is_action_pressed(action):
+			return true
+	_input_release_gate_actions.clear()
+	return false
 
 func teleport_to(value: Vector2) -> void:
 	global_position = value
@@ -578,6 +599,13 @@ func _update_attack_state(delta: float) -> void:
 		_attack_projectile_pending = false
 
 func _process_player(delta: float) -> void:
+	if _is_player_input_release_gated():
+		velocity = Vector2.ZERO
+		if not attacking:
+			_play_if_needed("idle")
+		move_and_slide()
+		return
+
 	var move_input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attack_direction := _get_attack_direction()
 
@@ -887,12 +915,17 @@ func _get_primary_assisted_target(raw_target: Vector2, fallback_direction: Vecto
 func _get_attack_target(attack_dir: Vector2) -> Vector2:
 	var joy_id := _first_connected_joypad()
 	if joy_id >= 0:
-		var stick := Vector2(
-			Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_X),
-			Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_Y)
-		)
-		if stick.length() >= GAMEPAD_AIM_DEADZONE:
-			return global_position + Vector2(0.0, -18.0) + stick.normalized() * 220.0
+		var stick := _read_gamepad_aim(joy_id)
+		if stick.length_squared() > 0.0:
+			return global_position + Vector2(0.0, -18.0) + stick * 220.0
+		if _is_gamepad_combat_input_active(joy_id):
+			var retained := _last_gamepad_aim_direction
+			if retained.length_squared() <= 0.001:
+				retained = last_move_direction
+			if retained.length_squared() <= 0.001:
+				retained = Vector2.RIGHT
+			return global_position + Vector2(0.0, -18.0) + retained.normalized() * 220.0
+
 	var mouse_target := get_global_mouse_position()
 	if mouse_target.distance_squared_to(global_position) > 4.0:
 		return mouse_target
@@ -901,17 +934,48 @@ func _get_attack_target(attack_dir: Vector2) -> Vector2:
 func _get_attack_direction() -> Vector2:
 	var joy_id := _first_connected_joypad()
 	if joy_id >= 0:
-		var stick := Vector2(
-			Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_X),
-			Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_Y)
-		)
-		if stick.length() >= GAMEPAD_AIM_DEADZONE:
-			return stick.normalized()
+		var stick := _read_gamepad_aim(joy_id)
+		if stick.length_squared() > 0.0:
+			return stick
+		if _is_gamepad_combat_input_active(joy_id):
+			if _last_gamepad_aim_direction.length_squared() > 0.001:
+				return _last_gamepad_aim_direction.normalized()
+			if last_move_direction.length_squared() > 0.001:
+				return last_move_direction.normalized()
+			return Vector2.RIGHT
 
 	var mouse_delta := get_global_mouse_position() - (global_position + Vector2(0.0, -18.0))
 	if mouse_delta.length_squared() > 4.0:
 		return mouse_delta.normalized()
 	return last_move_direction
+
+func _read_gamepad_aim(joy_id: int) -> Vector2:
+	var stick := Vector2(
+		Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_X),
+		Input.get_joy_axis(joy_id, JOY_AXIS_RIGHT_Y)
+	)
+	if stick.length() < GAMEPAD_AIM_DEADZONE:
+		return Vector2.ZERO
+	_last_gamepad_aim_direction = stick.normalized()
+	return _last_gamepad_aim_direction
+
+func _is_gamepad_combat_input_active(joy_id: int) -> bool:
+	# Distinguish controller-triggered attacks from mouse clicks when both devices
+	# are connected. This prevents a centered right stick from inheriting a stale
+	# mouse cursor position while RT/LT is being used.
+	if Input.get_joy_axis(joy_id, JOY_AXIS_TRIGGER_RIGHT) > 0.18:
+		return true
+	if Input.get_joy_axis(joy_id, JOY_AXIS_TRIGGER_LEFT) > 0.18:
+		return true
+	if Input.is_joy_button_pressed(joy_id, JOY_BUTTON_A):
+		return true
+	if Input.is_joy_button_pressed(joy_id, JOY_BUTTON_LEFT_SHOULDER):
+		return true
+	var move_stick := Vector2(
+		Input.get_joy_axis(joy_id, JOY_AXIS_LEFT_X),
+		Input.get_joy_axis(joy_id, JOY_AXIS_LEFT_Y)
+	)
+	return move_stick.length() >= 0.22
 
 func _first_connected_joypad() -> int:
 	var joypads := Input.get_connected_joypads()

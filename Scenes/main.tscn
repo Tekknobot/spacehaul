@@ -173,7 +173,8 @@ SHIFT  LB  RUN
 SPACE  A  BOOST
 LEFT MOUSE  RT  PRIMARY
 RIGHT MOUSE  LT  SECONDARY
-G  RB  NEW RUN"
+MOUSE WHEEL  X Y  OMEGA
+TAB  BACK  MAP"
 
 [node name="BottomCenter" type="CenterContainer" parent="HUD" unique_id=5209970]
 anchors_preset = 12

@@ -48,8 +48,10 @@ func _spawn_single_mecha(chosen_id: String) -> void:
 	if mecha == null:
 		return
 	mecha.mecha_id = chosen_id if chosen_id in MECHA_IDS else "M1"
-	mecha.position = deck.spawn_position
 	add_child(mecha)
+	# ProceduralDeck exposes a world-space deployment point. Apply it after the
+	# mecha is parented so a future transform on MechaManager cannot offset spawn.
+	mecha.teleport_to(deck.spawn_position)
 	mechas.append(mecha)
 	_set_active_mecha(mecha)
 

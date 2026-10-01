@@ -22,6 +22,11 @@ static func ensure_actions() -> void:
 	_add_action("regenerate_level")
 	_add_action("toggle_ui")
 	_add_action("cycle_deck_cheat")
+	_add_action("ui_accept")
+	_add_action("ui_up")
+	_add_action("ui_down")
+	_add_action("ui_left")
+	_add_action("ui_right")
 
 	_add_key("move_left", KEY_A)
 	_add_key("move_left", KEY_LEFT)
@@ -59,13 +64,14 @@ static func ensure_actions() -> void:
 	# add up to three OMEGA primaries to the wheel in acquisition order.
 	_add_mouse_button("cycle_omega_primary_next", MOUSE_BUTTON_WHEEL_DOWN)
 	_add_mouse_button("cycle_omega_primary_prev", MOUSE_BUTTON_WHEEL_UP)
+	# Gamepad face buttons mirror wheel cycling. X walks backward, Y forward.
+	# These actions are intentionally separate from movement/boost so changing an
+	# OMEGA primary never produces an accidental combat action.
+	_add_joy_button("cycle_omega_primary_prev", JOY_BUTTON_X)
+	_add_joy_button("cycle_omega_primary_next", JOY_BUTTON_Y)
 
 	_add_key("interact", KEY_E)
-	_add_joy_button("interact", JOY_BUTTON_X)
-
 	_add_key("tool", KEY_F)
-	_add_joy_button("tool", JOY_BUTTON_Y)
-
 	_add_key("pickup", KEY_Q)
 	_add_joy_button("pickup", JOY_BUTTON_B)
 
@@ -76,17 +82,34 @@ static func ensure_actions() -> void:
 	_add_joy_button("death_test", JOY_BUTTON_START)
 
 	_add_key("respawn", KEY_R)
-	_add_joy_button("respawn", JOY_BUTTON_BACK)
 
 	_add_key("regenerate_level", KEY_G)
-	_add_joy_button("regenerate_level", JOY_BUTTON_RIGHT_SHOULDER)
 
 	# Runtime deck/palette test. Press P repeatedly to cycle 1 -> 2 -> 3 -> 4 -> 5 -> 1.
 	_add_key("cycle_deck_cheat", KEY_P)
 
-	# Expedition map is optional during combat; TAB toggles it without hiding the
-	# persistent top HUD.
+	# Expedition map is optional during combat. Back/View mirrors TAB on gamepad.
 	_add_key("toggle_ui", KEY_TAB)
+	_add_joy_button("toggle_ui", JOY_BUTTON_BACK)
+
+	# Explicit UI navigation keeps pause/menu overlays controller-safe even on
+	# platforms whose default project InputMap differs from the editor defaults.
+	_add_key("ui_accept", KEY_ENTER)
+	_add_key("ui_accept", KEY_KP_ENTER)
+	_add_key("ui_accept", KEY_SPACE)
+	_add_key("ui_up", KEY_UP)
+	_add_key("ui_down", KEY_DOWN)
+	_add_key("ui_left", KEY_LEFT)
+	_add_key("ui_right", KEY_RIGHT)
+	_add_joy_button("ui_accept", JOY_BUTTON_A)
+	_add_joy_button("ui_up", JOY_BUTTON_DPAD_UP)
+	_add_joy_button("ui_down", JOY_BUTTON_DPAD_DOWN)
+	_add_joy_button("ui_left", JOY_BUTTON_DPAD_LEFT)
+	_add_joy_button("ui_right", JOY_BUTTON_DPAD_RIGHT)
+	_add_joy_axis("ui_up", JOY_AXIS_LEFT_Y, -1.0)
+	_add_joy_axis("ui_down", JOY_AXIS_LEFT_Y, 1.0)
+	_add_joy_axis("ui_left", JOY_AXIS_LEFT_X, -1.0)
+	_add_joy_axis("ui_right", JOY_AXIS_LEFT_X, 1.0)
 
 static func _add_action(action: StringName, deadzone: float = 0.2) -> void:
 	if not InputMap.has_action(action):

@@ -60,6 +60,7 @@ var _salvage_required := 6
 var _salvage_magnet_radius := 86.0
 var _upgrade_overlay: Control
 var _upgrade_title: Label
+var _upgrade_hint: Label
 var _upgrade_buttons: Array[Button] = []
 var _upgrade_choices: Array[Dictionary] = []
 var _omega_core_stored := false
@@ -86,6 +87,7 @@ var _hud_hostiles: Label
 var _event_feed: Label
 var _event_feed_tween: Tween
 var _expedition_panel: Control
+var _expedition_map_title: Label
 var _expedition_minimap: ExpeditionMinimap
 var _expedition_status: Label
 var _expedition_special_rooms: Array = []
@@ -129,6 +131,7 @@ var _showroom_demo_timer := 0.0
 var _showroom_active := false
 var _selected_mecha_id := "M1"
 var _menu_open := false
+var _using_gamepad := false
 
 func _enter_tree() -> void:
 	add_to_group("survival_manager")
@@ -157,6 +160,7 @@ func _ready() -> void:
 	_build_omega_overlay()
 	_build_run_summary_overlay()
 	_build_mecha_select_overlay()
+	_refresh_input_prompts()
 	_set_standard_hud_visible(false)
 	deck.set_deck_palette(_deck_number)
 	enemy_manager.set_spawning_enabled(false)
@@ -206,6 +210,39 @@ func _process(delta: float) -> void:
 				_start_deck_transition()
 
 	_update_hud()
+
+func _input(event: InputEvent) -> void:
+	# Track the device the player is actually using, not merely what is connected.
+	# Ignore low-level stick noise and tiny mouse drift so prompts do not flicker.
+	var wants_gamepad := _using_gamepad
+	var meaningful := false
+	if event is InputEventJoypadButton:
+		var joy_button := event as InputEventJoypadButton
+		meaningful = joy_button.pressed
+		wants_gamepad = true
+	elif event is InputEventJoypadMotion:
+		var joy_motion := event as InputEventJoypadMotion
+		if joy_motion.axis == JOY_AXIS_TRIGGER_LEFT or joy_motion.axis == JOY_AXIS_TRIGGER_RIGHT:
+			meaningful = joy_motion.axis_value >= 0.35
+		else:
+			meaningful = absf(joy_motion.axis_value) >= 0.35
+		wants_gamepad = true
+	elif event is InputEventKey:
+		var key_event := event as InputEventKey
+		meaningful = key_event.pressed and not key_event.echo
+		wants_gamepad = false
+	elif event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		meaningful = mouse_button.pressed
+		wants_gamepad = false
+	elif event is InputEventMouseMotion:
+		var mouse_motion := event as InputEventMouseMotion
+		meaningful = mouse_motion.relative.length_squared() >= 9.0
+		wants_gamepad = false
+
+	if meaningful and wants_gamepad != _using_gamepad:
+		_using_gamepad = wants_gamepad
+		_refresh_input_prompts()
 
 func _unhandled_input(event: InputEvent) -> void:
 	# The showroom uses the same left/right language as gameplay movement, but only
@@ -343,7 +380,7 @@ func _update_secondary_unlock() -> void:
 	active.set_secondary_unlocked(true)
 	if active.has_secondary_ability():
 		SFX.play(self, "level", -8.0, 1.12)
-		_show_banner("SECONDARY ONLINE   RMB")
+		_show_banner("SECONDARY ONLINE   %s" % _secondary_input_prompt())
 
 func _on_active_mecha_changed(mecha: MechaController) -> void:
 	if mecha == null:
@@ -653,17 +690,118 @@ func _build_showroom_backdrop() -> void:
 	horizon.add_point(Vector2(424.0, 92.0))
 	backdrop.add_child(horizon)
 
+func _primary_input_prompt() -> String:
+	return "RT" if _using_gamepad else "LMB"
+
+func _secondary_input_prompt() -> String:
+	return "LT" if _using_gamepad else "RMB"
+
+func _map_input_prompt() -> String:
+	return "BACK" if _using_gamepad else "TAB"
+
+func _omega_cycle_input_prompt() -> String:
+	return "X Y" if _using_gamepad else "MOUSE WHEEL"
+
+func _choice_button_text(index: int, label: String) -> String:
+	if _using_gamepad:
+		return label
+	return "%d   %s" % [index + 1, label]
+
+func _refresh_mecha_ability_prompts() -> void:
+	var abilities: Dictionary = MechaController.ABILITY_NAMES.get(_selected_mecha_id, {})
+	if _mecha_select_primary != null:
+		_mecha_select_primary.text = "%s   %s" % [_primary_input_prompt(), String(abilities.get("primary", "PRIMARY"))]
+	if _mecha_select_secondary != null:
+		_mecha_select_secondary.text = "%s   %s" % [_secondary_input_prompt(), String(abilities.get("secondary", "SECONDARY"))]
+	if _mecha_select_deploy != null:
+		_mecha_select_deploy.text = "A DEPLOY" if _using_gamepad else "DEPLOY"
+
+func _refresh_mecha_select_status() -> void:
+	if _mecha_select_status == null:
+		return
+	var navigation_hint := "L STICK / DPAD SELECT      A DEPLOY" if _using_gamepad else "LEFT RIGHT SELECT      ENTER DEPLOY"
+	if video_capture_mode:
+		if expedition_mode:
+			var capture_phase_names := ["EXPLORE", "OBJECTIVE", "BOSS", "EXTRACTION"]
+			var capture_phase = capture_phase_names[clampi(video_capture_expedition_phase, 0, capture_phase_names.size() - 1)]
+			_mecha_select_status.text = "VIDEO CAPTURE  DECK %d  %s  %02d:%02d      %s" % [
+				clampi(video_capture_expedition_deck, 1, EXPEDITION_DECK_COUNT),
+				capture_phase,
+				int(video_capture_start_minutes),
+				int(round(fmod(video_capture_start_minutes, 1.0) * 60.0)),
+				navigation_hint
+			]
+		else:
+			_mecha_select_status.text = "VIDEO CAPTURE  %02d:%02d      %s" % [
+				int(video_capture_start_minutes),
+				int(round(fmod(video_capture_start_minutes, 1.0) * 60.0)),
+				navigation_hint
+			]
+	else:
+		_mecha_select_status.text = navigation_hint
+
+func _refresh_upgrade_hint_prompt() -> void:
+	if _upgrade_hint == null:
+		return
+	_upgrade_hint.text = "UP DOWN SELECT      A CONFIRM" if _using_gamepad else "SELECT ONE UPGRADE   1  2  3"
+
+func _refresh_omega_hint_prompt() -> void:
+	if _omega_hint == null:
+		return
+	var active := mecha_manager.get_active_mecha()
+	if active == null or _omega_choices.is_empty():
+		_omega_hint.text = "SIGNATURE PRIMARY // SELECT ONE LEGENDARY EVOLUTION"
+		return
+	if _using_gamepad:
+		_omega_hint.text = "%s // %d REMAINING   UP DOWN SELECT   A CONFIRM" % [
+			active.get_omega_signature_name(),
+			_omega_choices.size()
+		]
+	else:
+		var key_hint := ""
+		for i in range(_omega_choices.size()):
+			if not key_hint.is_empty():
+				key_hint += "  "
+			key_hint += str(i + 1)
+		_omega_hint.text = "%s // SELECT FROM %d REMAINING   %s" % [
+			active.get_omega_signature_name(),
+			_omega_choices.size(),
+			key_hint
+		]
+
+func _refresh_choice_button_prompts() -> void:
+	for i in range(_upgrade_buttons.size()):
+		if i < _upgrade_choices.size() and not _upgrade_buttons[i].disabled:
+			_upgrade_buttons[i].text = _choice_button_text(i, String(_upgrade_choices[i].get("label", "UPGRADE")))
+	for i in range(_omega_buttons.size()):
+		if i < _omega_choices.size() and _omega_buttons[i].visible and not _omega_buttons[i].disabled:
+			_omega_buttons[i].text = _choice_button_text(i, String(_omega_choices[i].get("label", "OMEGA MUTATION")))
+
+func _refresh_input_prompts() -> void:
+	_refresh_mecha_ability_prompts()
+	_refresh_mecha_select_status()
+	_refresh_upgrade_hint_prompt()
+	_refresh_omega_hint_prompt()
+	_refresh_choice_button_prompts()
+	if _expedition_map_title != null:
+		_expedition_map_title.text = "DECK MAP   //   %s CLOSE" % _map_input_prompt()
+
+func _gate_active_mecha_after_ui_confirm() -> void:
+	var active := mecha_manager.get_active_mecha()
+	if active == null or not is_instance_valid(active):
+		return
+	active.suppress_player_input_until_released([
+		&"dash", &"shoot", &"secondary_ability",
+		&"move_left", &"move_right", &"move_up", &"move_down"
+	])
+
 func _select_mecha(mecha_id: String) -> void:
 	if mecha_id not in MechaManager.MECHA_IDS:
 		return
 	_selected_mecha_id = mecha_id
 	var display_name := String(MechaController.MECHA_DISPLAY_NAMES.get(mecha_id, mecha_id))
-	var abilities: Dictionary = MechaController.ABILITY_NAMES.get(mecha_id, {})
 	_mecha_select_name.text = "%s   %s" % [mecha_id, display_name]
-	_mecha_select_primary.text = "LMB   %s" % String(abilities.get("primary", "PRIMARY"))
-	_mecha_select_secondary.text = "RMB   %s" % String(abilities.get("secondary", "SECONDARY"))
-	if _mecha_select_deploy != null:
-		_mecha_select_deploy.text = "DEPLOY"
+	_refresh_mecha_ability_prompts()
 
 	var index := MechaManager.MECHA_IDS.find(mecha_id)
 	var count := MechaManager.MECHA_IDS.size()
@@ -754,8 +892,10 @@ func _trigger_showroom_ability(alternate: bool) -> void:
 	# isolated SubViewport before the deferred ability sequence begins.
 	effect.root = _showroom_fx_root
 	if _showroom_demo_label != null:
-		var ability_name := _mecha_select_secondary.text.replace("RMB   ", "") if alternate else _mecha_select_primary.text.replace("LMB   ", "")
-		_showroom_demo_label.text = "%s   %s" % ["RMB" if alternate else "LMB", ability_name]
+		var abilities: Dictionary = MechaController.ABILITY_NAMES.get(_selected_mecha_id, {})
+		var ability_name := String(abilities.get("secondary" if alternate else "primary", "SECONDARY" if alternate else "PRIMARY"))
+		var prompt := _secondary_input_prompt() if alternate else _primary_input_prompt()
+		_showroom_demo_label.text = "%s   %s" % [prompt, ability_name]
 
 func _update_mecha_showroom(delta: float) -> void:
 	if not _showroom_active or _showroom_mecha == null or not is_instance_valid(_showroom_mecha):
@@ -804,24 +944,11 @@ func _show_mecha_select(status_text: String = "SELECT A CHASSIS") -> void:
 	if deck_banner != null:
 		deck_banner.hide()
 	_set_standard_hud_visible(false)
-	if _mecha_select_status != null:
-		if video_capture_mode:
-			if expedition_mode:
-				var capture_phase_names := ["EXPLORE", "OBJECTIVE", "BOSS", "EXTRACTION"]
-				var capture_phase = capture_phase_names[clampi(video_capture_expedition_phase, 0, capture_phase_names.size() - 1)]
-				_mecha_select_status.text = "VIDEO CAPTURE  DECK %d  %s  %02d:%02d      LEFT RIGHT SELECT      ENTER A DEPLOY" % [
-					clampi(video_capture_expedition_deck, 1, EXPEDITION_DECK_COUNT),
-					capture_phase,
-					int(video_capture_start_minutes),
-					int(round(fmod(video_capture_start_minutes, 1.0) * 60.0))
-				]
-			else:
-				_mecha_select_status.text = "VIDEO CAPTURE  %02d:%02d      LEFT RIGHT SELECT      ENTER A DEPLOY" % [
-					int(video_capture_start_minutes),
-					int(round(fmod(video_capture_start_minutes, 1.0) * 60.0))
-				]
-		else:
-			_mecha_select_status.text = "LEFT RIGHT   SELECT      ENTER A   DEPLOY"
+	# A focused button from the run-summary/upgrade UI can consume gamepad A
+	# before _unhandled_input sees the showroom deploy press. The showroom uses
+	# explicit left/right selection, so it should start with no GUI focus owner.
+	get_viewport().gui_release_focus()
+	_refresh_mecha_select_status()
 	if _mecha_select_overlay != null:
 		_mecha_select_overlay.show()
 		_showroom_active = true
@@ -864,6 +991,7 @@ func _start_selected_run() -> void:
 	deck.set_deck_palette(_deck_number)
 	deck.generate_new_level()
 	mecha_manager.start_new_run_with_mecha(_selected_mecha_id)
+	_gate_active_mecha_after_ui_confirm()
 	enemy_manager.expedition_boss_controlled = expedition_mode
 	enemy_manager.reset_run()
 	_set_standard_hud_visible(true)
@@ -1149,7 +1277,7 @@ func _reset_expedition_state() -> void:
 		_expedition_minimap.set_player_cell(spawn_cell)
 		_expedition_minimap.reveal_around(spawn_cell, 4)
 	_update_expedition_status()
-	_show_banner("DECK %d/%d   //   EXPLORE + SECURE 4 SYSTEMS   //   TAB MAP" % [_deck_number, EXPEDITION_DECK_COUNT], 2.8)
+	_show_banner("DECK %d/%d   //   EXPLORE + SECURE 4 SYSTEMS   //   %s MAP" % [_deck_number, EXPEDITION_DECK_COUNT, _map_input_prompt()], 2.8)
 
 func _refresh_expedition_map_data() -> void:
 	if not expedition_mode or _expedition_minimap == null or deck == null:
@@ -1415,7 +1543,7 @@ func _toggle_expedition_map() -> void:
 	_expedition_map_visible = not _expedition_map_visible
 	_expedition_panel.visible = _expedition_map_visible
 	if _expedition_map_visible:
-		_show_banner("DECK MAP OPEN   //   TAB CLOSE", 0.75)
+		_show_banner("DECK MAP OPEN   //   %s CLOSE" % _map_input_prompt(), 0.75)
 
 
 
@@ -1804,12 +1932,12 @@ func _build_expedition_ui() -> void:
 	box.add_theme_constant_override("separation", 2)
 	margin.add_child(box)
 
-	var title := Label.new()
-	title.text = "DECK MAP   //   TAB CLOSE"
-	title.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
-	title.add_theme_font_size_override("font_size", 10)
-	title.add_theme_color_override("font_color", Color(0.68, 0.90, 0.94, 1.0))
-	box.add_child(title)
+	_expedition_map_title = Label.new()
+	_expedition_map_title.text = "DECK MAP   //   TAB CLOSE"
+	_expedition_map_title.add_theme_font_override("font", load("res://Fonts/mago1.ttf") as Font)
+	_expedition_map_title.add_theme_font_size_override("font_size", 10)
+	_expedition_map_title.add_theme_color_override("font_color", Color(0.68, 0.90, 0.94, 1.0))
+	box.add_child(_expedition_map_title)
 
 	_expedition_minimap = ExpeditionMinimapScript.new() as ExpeditionMinimap
 	_expedition_minimap.custom_minimum_size = Vector2(160.0, 102.0)
@@ -2155,13 +2283,13 @@ func _build_upgrade_overlay() -> void:
 	_upgrade_title.add_theme_color_override("font_color", Color(0.62, 0.94, 1.0, 1.0))
 	box.add_child(_upgrade_title)
 
-	var hint := Label.new()
-	hint.text = "SELECT ONE UPGRADE   1  2  3"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.add_theme_font_override("font", font_small)
-	hint.add_theme_font_size_override("font_size", 16)
-	hint.add_theme_color_override("font_color", Color(0.62, 0.7, 0.76, 1.0))
-	box.add_child(hint)
+	_upgrade_hint = Label.new()
+	_upgrade_hint.text = "SELECT ONE UPGRADE   1  2  3"
+	_upgrade_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_upgrade_hint.add_theme_font_override("font", font_small)
+	_upgrade_hint.add_theme_font_size_override("font_size", 16)
+	_upgrade_hint.add_theme_color_override("font_color", Color(0.62, 0.7, 0.76, 1.0))
+	box.add_child(_upgrade_hint)
 
 	for index in range(3):
 		var button := Button.new()
@@ -2251,27 +2379,14 @@ func _present_omega_choices() -> void:
 	var capacity := active.get_omega_mutation_capacity()
 	_omega_title.text = "OMEGA CORE %d/%d   %s" % [acquired + 1, capacity, active.get_display_name()]
 
-	if _omega_hint != null:
-		var key_hint := ""
-		for i in range(_omega_choices.size()):
-			if not key_hint.is_empty():
-				key_hint += "  "
-			key_hint += str(i + 1)
-		_omega_hint.text = "%s // SELECT FROM %d REMAINING   %s" % [
-			active.get_omega_signature_name(),
-			_omega_choices.size(),
-			key_hint
-		]
+	_refresh_omega_hint_prompt()
 
 	for i in range(_omega_buttons.size()):
 		var available := i < _omega_choices.size()
 		_omega_buttons[i].visible = available
 		_omega_buttons[i].disabled = not available
 		if available:
-			_omega_buttons[i].text = "%d   %s" % [
-				i + 1,
-				String(_omega_choices[i].get("label", "OMEGA MUTATION"))
-			]
+			_omega_buttons[i].text = _choice_button_text(i, String(_omega_choices[i].get("label", "OMEGA MUTATION")))
 
 	if _omega_guide != null:
 		_omega_guide.visible = false
@@ -2294,6 +2409,7 @@ func _choose_omega_mutation(index: int) -> void:
 	_omega_core_stored = false
 	_omega_overlay.hide()
 	get_tree().paused = false
+	_gate_active_mecha_after_ui_confirm()
 	SFX.play_ui(self, "secondary", -4.0, 0.72)
 
 	var acquired := active.get_omega_mutation_count()
@@ -2301,7 +2417,7 @@ func _choose_omega_mutation(index: int) -> void:
 	var status := "OMEGA ACQUIRED %d/%d   %s" % [acquired, capacity, active.get_legendary_mutation_display_name()]
 	if active.has_all_omega_mutations():
 		status = "OMEGA ARSENAL COMPLETE   %s" % active.get_legendary_mutation_display_name()
-	_show_banner("%s\nMOUSE WHEEL   CYCLE STANDARD / OMEGA" % status, 2.35)
+	_show_banner("%s\n%s   CYCLE STANDARD / OMEGA" % [status, _omega_cycle_input_prompt()], 2.35)
 	_update_hud()
 	call_deferred("_check_level_up")
 
@@ -2353,13 +2469,14 @@ func _present_upgrade_choices() -> void:
 
 	for i in range(_upgrade_buttons.size()):
 		if i < _upgrade_choices.size():
-			_upgrade_buttons[i].text = "%d   %s" % [i + 1, String(_upgrade_choices[i]["label"])]
+			_upgrade_buttons[i].text = _choice_button_text(i, String(_upgrade_choices[i]["label"]))
 			_upgrade_buttons[i].disabled = false
 		else:
 			_upgrade_buttons[i].text = ""
 			_upgrade_buttons[i].disabled = true
 
 	_upgrade_title.text = "SALVAGE LEVEL %02d" % _level
+	_refresh_upgrade_hint_prompt()
 	if _omega_guide != null:
 		_omega_guide.visible = false
 	_upgrade_overlay.show()
@@ -2398,6 +2515,7 @@ func _choose_upgrade(index: int) -> void:
 
 	_upgrade_overlay.hide()
 	get_tree().paused = false
+	_gate_active_mecha_after_ui_confirm()
 	_update_hud()
 	if _omega_core_stored:
 		call_deferred("_try_open_omega_mutation")
