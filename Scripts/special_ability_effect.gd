@@ -1134,230 +1134,430 @@ func _chain_enemy_points(max_hops: int, first_range: float, jump_range: float) -
 		points.append(cursor)
 	return points
 
-# M1 PRIMARY: PLASMA CLEAVER
-# A short, hard-edged crescent that chews through the crowd in front of M1.
-func _m1_traveling_cleaver_wave(
-	start_radius: float,
-	end_radius: float,
-	start_half_angle: float,
-	end_half_angle: float,
-	teeth: int,
-	travel_time: float,
-	hit_radius: float,
+# M1 PRIMARY: PLASMA RAM
+# ATLAS no longer attacks with a curved blade. Its primary is a solid, moving
+# isometric plasma mass: a thick wedge with visible top/front/side faces that
+# advances toward the aimed enemy and damages through its footprint rather than
+# along a rendered trajectory.
+func _m1_make_plasma_ram(
+	at: Vector2,
+	facing: Vector2,
+	width: float,
+	depth: float,
+	height: float,
 	core: Color,
-	glow: Color
+	glow: Color,
+	overcharged: bool = false
+) -> Node2D:
+	var container := Node2D.new()
+	container.global_position = at.round()
+	container.z_as_relative = false
+	root.add_child(container)
+
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	container.material = additive
+
+	var safe_facing := facing.normalized()
+	if safe_facing.length_squared() <= 0.001:
+		safe_facing = direction
+	if safe_facing.length_squared() <= 0.001:
+		safe_facing = Vector2.RIGHT
+
+	var forward := IsoVfx.ground_vector(
+		safe_facing,
+		depth * 0.5
+	)
+	var side := IsoVfx.ground_perpendicular_offset(
+		safe_facing,
+		width * 0.5
+	)
+
+	# The front is slightly narrower than the rear, giving the volume a heavy
+	# wedge/bulldozer silhouette instead of reading as a flat rectangle.
+	var back_left := -forward - side
+	var back_right := -forward + side
+	var front_right := forward + side * 0.72
+	var front_left := forward - side * 0.72
+	var rise := Vector2(0.0, -height)
+
+	var top_points := PackedVector2Array([
+		back_left + rise,
+		back_right + rise,
+		front_right + rise,
+		front_left + rise
+	])
+
+	var front_points := PackedVector2Array([
+		front_left,
+		front_right,
+		front_right + rise,
+		front_left + rise
+	])
+
+	var left_points := PackedVector2Array([
+		back_left,
+		front_left,
+		front_left + rise,
+		back_left + rise
+	])
+
+	var right_points := PackedVector2Array([
+		front_right,
+		back_right,
+		back_right + rise,
+		front_right + rise
+	])
+
+	var base := Polygon2D.new()
+	base.polygon = PackedVector2Array([
+		back_left,
+		back_right,
+		front_right,
+		front_left
+	])
+	base.color = Color(glow.r, glow.g, glow.b, 0.10)
+	container.add_child(base)
+
+	var left_face := Polygon2D.new()
+	left_face.polygon = left_points
+	left_face.color = Color(
+		glow.r,
+		glow.g,
+		glow.b,
+		0.18 if not overcharged else 0.24
+	)
+	container.add_child(left_face)
+
+	var right_face := Polygon2D.new()
+	right_face.polygon = right_points
+	right_face.color = Color(
+		core.r,
+		core.g,
+		core.b,
+		0.12 if not overcharged else 0.18
+	)
+	container.add_child(right_face)
+
+	var front_face := Polygon2D.new()
+	front_face.polygon = front_points
+	front_face.color = Color(
+		core.r,
+		core.g,
+		core.b,
+		0.28 if not overcharged else 0.36
+	)
+	container.add_child(front_face)
+
+	var top_face := Polygon2D.new()
+	top_face.polygon = top_points
+	top_face.color = Color(
+		core.r,
+		core.g,
+		core.b,
+		0.20 if not overcharged else 0.30
+	)
+	container.add_child(top_face)
+
+	# Short structural edges are deliberately local to the volume. Nothing draws
+	# a projectile path from ATLAS to the target.
+	var outline := Line2D.new()
+	outline.width = CORE_PIXEL
+	outline.default_color = core
+	outline.antialiased = false
+	for point in top_points:
+		outline.add_point(point)
+	outline.add_point(top_points[0])
+	container.add_child(outline)
+
+	var front_bloom := Line2D.new()
+	front_bloom.width = BLOOM_PIXEL
+	front_bloom.default_color = Color(glow.r, glow.g, glow.b, 0.28)
+	front_bloom.antialiased = false
+	front_bloom.add_point(front_left)
+	front_bloom.add_point(front_right)
+	front_bloom.add_point(front_right + rise)
+	front_bloom.add_point(front_left + rise)
+	front_bloom.add_point(front_left)
+	container.add_child(front_bloom)
+
+	# Two vertical corner marks make the ram's height legible in motion.
+	for corner in [front_left, front_right]:
+		var edge := Line2D.new()
+		edge.width = CORE_PIXEL
+		edge.default_color = Color(core.r, core.g, core.b, 0.78)
+		edge.antialiased = false
+		edge.add_point(corner)
+		edge.add_point(corner + rise)
+		container.add_child(edge)
+
+	_set_fx_depth(container, at, 1)
+	return container
+
+
+func _m1_stamp_compression_tile(
+	at: Vector2,
+	facing: Vector2,
+	width: float,
+	core: Color,
+	glow: Color,
+	life: float = 0.18
 ) -> void:
-	var hit_ids: Dictionary = {}
-	var step_count := 12
+	var tile := Polygon2D.new()
+	var safe_facing := facing.normalized()
+	if safe_facing.length_squared() <= 0.001:
+		safe_facing = direction
+	if safe_facing.length_squared() <= 0.001:
+		safe_facing = Vector2.RIGHT
 
-	var final_arc := PackedVector2Array()
+	var forward := IsoVfx.ground_vector(safe_facing, width * 0.20)
+	var side := IsoVfx.ground_perpendicular_offset(safe_facing, width * 0.50)
 
-	for step in range(step_count):
-		var t := float(step) / float(maxi(1, step_count - 1))
+	tile.polygon = PackedVector2Array([
+		-forward - side,
+		-forward + side,
+		forward + side * 0.72,
+		forward - side * 0.72
+	])
+	tile.color = Color(core.r, core.g, core.b, 0.13)
+	tile.global_position = at.round()
+	tile.z_as_relative = false
+	tile.z_index = _depth_index_for_point(at, -1)
 
-		var radius := lerpf(
-			start_radius,
-			end_radius,
-			t
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	tile.material = additive
+	root.add_child(tile)
+
+	_spawn_impact_particles(
+		at,
+		Color(core.r, core.g, core.b, 0.78),
+		Color(glow.r, glow.g, glow.b, 0.72),
+		maxf(5.0, width * 0.18)
+	)
+
+	var tween := root.create_tween()
+	tween.tween_property(tile, "modulate:a", 0.0, life)
+	tween.tween_callback(tile.queue_free)
+
+
+func _m1_ram_hit_volume(
+	center: Vector2,
+	facing: Vector2,
+	width: float,
+	depth: float,
+	hit_ids: Dictionary
+) -> void:
+	if preview_mode or get_world_2d() == null:
+		return
+
+	var safe_facing := facing.normalized()
+	if safe_facing.length_squared() <= 0.001:
+		safe_facing = direction
+	if safe_facing.length_squared() <= 0.001:
+		safe_facing = Vector2.RIGHT
+
+	var side_steps := 3
+	if width >= 50.0:
+		side_steps = 5
+
+	var row_positions := [-0.34, 0.0, 0.34]
+	var shape := CircleShape2D.new()
+	shape.radius = clampf(width * 0.16, 6.0, 11.0)
+
+	var query := PhysicsShapeQueryParameters2D.new()
+	query.shape = shape
+	query.collision_mask = 2
+	query.collide_with_bodies = true
+	query.collide_with_areas = true
+
+	for row in row_positions:
+		var row_center := (
+			center
+			+ IsoVfx.ground_vector(
+				safe_facing,
+				depth * float(row)
+			)
 		)
 
-		var half_angle := lerpf(
-			start_half_angle,
-			end_half_angle,
-			t
-		)
+		for side_index in range(side_steps):
+			var side_t := (
+				0.0
+				if side_steps == 1
+				else float(side_index) / float(side_steps - 1) - 0.5
+			)
 
-		var arc := _arc_points(
-			owner_ground,
-			direction.angle(),
-			radius,
-			half_angle,
-			teeth
-		)
-
-		final_arc = arc
-
-		var blade := _polyline(
-			arc,
-			core,
-			glow
-		)
-
-
-		_fade_free(
-			blade,
-			0.075
-		)
-
-		if get_world_2d() != null:
-			var shape := CircleShape2D.new()
-			shape.radius = hit_radius
-
-			var query := PhysicsShapeQueryParameters2D.new()
-			query.shape = shape
-			query.collision_mask = 2
-			query.collide_with_bodies = true
-			query.collide_with_areas = true
-
-			for point in arc:
-				query.transform = Transform2D(
-					0.0,
-					point
-				)
-
-				for hit in get_world_2d().direct_space_state.intersect_shape(
-					query,
-					32
-				):
-					var collider := hit.get("collider") as Object
-
-					if collider == null:
-						continue
-
-					if not collider.has_method("take_projectile_hit"):
-						continue
-
-					var id := collider.get_instance_id()
-
-					if hit_ids.has(id):
-						continue
-
-					var body := collider as Node2D
-
-					if body != null:
-						if not IsoVfx.inside_ground_radius(
-							point,
-							body.global_position,
-							hit_radius
-						):
-							continue
-
-					hit_ids[id] = true
-
-					var push := direction
-
-					if body != null:
-						push = body.global_position - owner_ground
-
-						if push.length_squared() <= 0.001:
-							push = direction
-
-					collider.call(
-						"take_projectile_hit",
-						push.normalized()
-					)
-
-					# Contact explosion.
-					#
-					# This is deliberately visual-only because the enemy
-					# has already received the cleaver hit above.
-					var impact_position := point
-
-					if body != null:
-						impact_position = body.global_position
-
-					_ability_impact_fx(
-						impact_position,
-						Color(
-							3.0,
-							1.55,
-							0.55,
-							1.0
-						),
-						Color(
-							1.5,
-							0.40,
-							0.08,
-							1.0
-						),
-						8.0
-					)
-
-		# Plasma debris along the moving blade.
-		if step % 2 == 0:
-			var tip := (
-				owner_ground
-				+ IsoVfx.ground_vector(
-					direction,
-					radius
+			var sample := (
+				row_center
+				+ IsoVfx.ground_perpendicular_offset(
+					safe_facing,
+					side_t * width * 0.82
 				)
 			).round()
 
-			_spark_pixels(
-				tip,
+			query.transform = Transform2D(0.0, sample)
+
+			for hit in get_world_2d().direct_space_state.intersect_shape(query, 24):
+				var collider := hit.get("collider") as Object
+				if collider == null or not collider.has_method("take_projectile_hit"):
+					continue
+
+				var collider_id := collider.get_instance_id()
+				if hit_ids.has(collider_id):
+					continue
+
+				hit_ids[collider_id] = true
+				var body := collider as Node2D
+				var impact_at := sample
+				if body != null:
+					impact_at = body.global_position.round()
+
+				collider.call(
+					"take_projectile_hit",
+					safe_facing
+				)
+
+				_ability_impact_fx(
+					impact_at,
+					Color(3.0, 1.55, 0.55, 1.0),
+					Color(1.5, 0.40, 0.08, 1.0),
+					8.0
+				)
+
+
+func _m1_pick_ram_target(
+	fallback: Vector2,
+	search_radius: float,
+	max_owner_range: float,
+	excluded_ids: Dictionary
+) -> Dictionary:
+	var enemy := _nearest_unused_enemy(
+		fallback,
+		search_radius,
+		max_owner_range,
+		excluded_ids
+	)
+
+	if enemy != null:
+		var enemy_id := enemy.get_instance_id()
+		excluded_ids[enemy_id] = true
+		return {
+			"position": enemy.global_position.round(),
+			"id": enemy_id
+		}
+
+	return {
+		"position": fallback.round(),
+		"id": 0
+	}
+
+
+func _m1_plasma_ram_pass(
+	destination: Vector2,
+	width: float,
+	depth: float,
+	height: float,
+	travel_time: float,
+	core: Color,
+	glow: Color,
+	overcharged: bool = false
+) -> void:
+	var delta := destination - owner_ground
+	var facing := delta.normalized()
+	if facing.length_squared() <= 0.001:
+		facing = direction
+	if facing.length_squared() <= 0.001:
+		facing = Vector2.RIGHT
+
+	var start := (
+		owner_ground
+		+ IsoVfx.ground_vector(
+			facing,
+			24.0
+		)
+	).round()
+
+	var ram := _m1_make_plasma_ram(
+		start,
+		facing,
+		width,
+		depth,
+		height,
+		core,
+		glow,
+		overcharged
+	)
+
+	_spawn_impact_particles(
+		start,
+		core,
+		glow,
+		10.0 + width * 0.10
+	)
+
+	var hit_ids: Dictionary = {}
+	var steps := 13 if not overcharged else 15
+
+	for step in range(steps):
+		var t := float(step + 1) / float(steps)
+		var travel_t := 1.0 - pow(1.0 - t, 2.15)
+		var current := start.lerp(destination, travel_t).round()
+
+		if is_instance_valid(ram):
+			ram.global_position = current
+			ram.scale = Vector2.ONE * lerpf(0.88, 1.0, travel_t)
+			_set_fx_depth(ram, current, 1)
+
+		_m1_ram_hit_volume(
+			current,
+			facing,
+			width,
+			depth,
+			hit_ids
+		)
+
+		if step % 3 == 0:
+			_m1_stamp_compression_tile(
+				current,
+				facing,
+				width * 0.72,
 				core,
-				Color(
-					glow.r,
-					glow.g,
-					glow.b,
-					1.0
-				),
-				2,
-				8.0,
-				0.16
+				glow,
+				0.16 if not overcharged else 0.22
 			)
 
 		await _sleep(
-			travel_time / float(step_count)
+			travel_time / float(steps)
 		)
 
-	# Restore the original Plasma Cleaver's three-point impact language.
-	#
-	# The final wave detonates at:
-	# - one end of the crescent
-	# - the center
-	# - the opposite end
-	if final_arc.size() >= 3:
-		var impact_indices := [
-			0,
-			int(final_arc.size() / 2),
-			final_arc.size() - 1
-		]
-
-		for index in impact_indices:
-			var point := final_arc[index]
-
-			_explode(
-				point,
-				Color(
-					3.0,
-					1.5,
-					0.55,
-					1.0
-				),
-				Color(
-					1.5,
-					0.40,
-					0.08,
-					1.0
-				),
-				10.0 + float(primary_tier),
-				9.0 + float(primary_tier)
-			)
-
-	# Final plasma breakup.
-	var final_tip := (
-		owner_ground
-			+ IsoVfx.ground_vector(
-				direction,
-				end_radius
-			)
-	).round()
-
-	_spark_pixels(
-		final_tip,
-		core,
-		Color(
-			glow.r,
-			glow.g,
-			glow.b,
-			1.0
-		),
-		6,
-		18.0,
-		0.22
+	_explode(
+		destination,
+		Color(core.r, maxf(core.g, 1.45), maxf(core.b, 0.45), 1.0),
+		Color(glow.r, glow.g, glow.b, 1.0),
+		16.0 + width * 0.16,
+		15.0 + width * 0.14
 	)
-	
+
+	_m1_stamp_compression_tile(
+		destination,
+		facing,
+		width,
+		core,
+		glow,
+		0.26
+	)
+
+	if is_instance_valid(ram):
+		var tween := root.create_tween()
+		tween.tween_interval(0.055 if not overcharged else 0.085)
+		tween.tween_property(
+			ram,
+			"modulate:a",
+			0.0,
+			0.12 if not overcharged else 0.16
+		)
+		tween.tween_callback(ram.queue_free)
+
 func _ability_impact_fx(
 	at: Vector2,
 	core: Color,
@@ -2298,136 +2498,260 @@ func _s3_legendary_ghost_swarm(base_direction: Vector2) -> void:
 	direction = saved_direction
 
 func _m1_legendary_omega_edge(base_direction: Vector2) -> void:
-	# Three over-range cleavers tear through a broad forward fan. This is the
-	# cleanest "more blade" mutation and keeps ATLAS readable in dense swarms.
-	for angle in [-0.30, 0.0, 0.30]:
-		direction = base_direction.rotated(float(angle)).normalized()
-		await _m1_traveling_cleaver_wave(
-			30.0, 205.0, deg_to_rad(31.0), deg_to_rad(52.0), 17, 0.13, 13.0,
-			Color(3.5, 1.25, 3.7, 1.0), Color(1.45, 0.14, 1.8, 0.34)
+	# Save ID "omega_edge": three dense plasma rams now converge through the aimed
+	# sector instead of drawing three larger blades.
+	var excluded_ids: Dictionary = {}
+	var center := _target_clamped(225.0)
+
+	for i in range(3):
+		var offset := (float(i) - 1.0) * 42.0
+		var fallback := (
+			center
+			+ IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				offset
+			)
+		).round()
+
+		var target_data := _m1_pick_ram_target(
+			fallback,
+			72.0,
+			255.0,
+			excluded_ids
 		)
+
+		await _m1_plasma_ram_pass(
+			target_data["position"],
+			54.0,
+			32.0,
+			20.0,
+			0.13,
+			Color(3.5, 1.25, 3.7, 1.0),
+			Color(1.45, 0.14, 1.8, 1.0),
+			true
+		)
+
 		await _sleep(0.018)
-	direction = base_direction
-	var end := owner_ground + IsoVfx.ground_vector(base_direction, 190.0)
-	_pulse_ring(end, 30.0, Color(3.5, 2.5, 3.8, 1.0), Color(1.4, 0.16, 1.8, 0.25), 0.16, 24)
-	_explode(end, Color(3.4, 1.5, 3.7, 1.0), Color(1.3, 0.12, 1.8, 1.0), 30.0, 30.0)
+
 
 func _m1_legendary_atlas_crown(base_direction: Vector2) -> void:
-	# Plasma Cleaver becomes an omnidirectional crown. The six blades fire in a
-	# fast clock sequence so every sector around the chassis becomes dangerous.
+	# Save ID "atlas_crown": six short plasma masses radiate from ATLAS like a
+	# mechanical crown. These are solid moving volumes, not spokes or beam paths.
 	var start_angle := base_direction.angle()
-	_pulse_ring(owner_ground, 38.0, Color(1.7, 3.3, 3.6, 1.0), Color(0.22, 1.0, 1.7, 0.22), 0.18, 30)
+	var excluded_ids: Dictionary = {}
+
 	for i in range(6):
-		direction = Vector2.from_angle(start_angle + TAU * float(i) / 6.0)
-		await _m1_traveling_cleaver_wave(
-			24.0, 164.0, deg_to_rad(25.0), deg_to_rad(40.0), 13, 0.10, 11.5,
-			Color(1.55, 3.25, 3.55, 1.0), Color(0.18, 1.05, 1.75, 0.30)
+		var aim := Vector2.from_angle(
+			start_angle
+			+ TAU * float(i) / 6.0
 		)
-		await _sleep(0.012)
-	direction = base_direction
-	_radial_hit(owner_ground, 104.0, true)
-	_pulse_ring(owner_ground, 106.0, Color(2.2, 3.4, 3.6, 1.0), Color(0.25, 1.0, 1.6, 0.24), 0.20, 36)
+		var fallback := (
+			owner_ground
+			+ IsoVfx.ground_vector(
+				aim,
+				154.0
+			)
+		).round()
+
+		var target_data := _m1_pick_ram_target(
+			fallback,
+			48.0,
+			178.0,
+			excluded_ids
+		)
+
+		await _m1_plasma_ram_pass(
+			target_data["position"],
+			40.0,
+			25.0,
+			15.0,
+			0.095,
+			Color(1.55, 3.25, 3.55, 1.0),
+			Color(0.18, 1.05, 1.75, 1.0),
+			false
+		)
+
+		await _sleep(0.010)
+
+	_radial_hit(owner_ground, 108.0, true)
+	_pulse_ring(
+		owner_ground,
+		108.0,
+		Color(2.2, 3.4, 3.6, 1.0),
+		Color(0.25, 1.0, 1.6, 0.24),
+		0.18,
+		36
+	)
+
 
 func _m1_legendary_world_breaker(base_direction: Vector2) -> void:
-	# One colossal forward rupture. The cleaver opens the lane, then a sequence
-	# of delayed reactor detonations walks away from ATLAS through the horde.
-	direction = base_direction
-	await _m1_traveling_cleaver_wave(
-		34.0, 230.0, deg_to_rad(34.0), deg_to_rad(59.0), 19, 0.20, 15.0,
-		Color(3.6, 2.2, 0.72, 1.0), Color(1.7, 0.42, 0.08, 0.34)
+	# Save ID "world_breaker": one colossal isometric ram occupies the lane and
+	# stamps the deck as it advances. The attack reads as mass and compression,
+	# never as a line or arc.
+	var fallback := _target_clamped(252.0)
+	var target_data := _m1_pick_ram_target(
+		fallback,
+		92.0,
+		286.0,
+		{}
 	)
-	for i in range(6):
-		var distance := 60.0 + float(i) * 34.0
-		var at := (owner_ground + IsoVfx.ground_vector(base_direction, distance)).round()
-		_explode(
-			at,
-			Color(3.6, 1.72 + float(i) * 0.06, 0.52, 1.0),
-			Color(1.7, 0.38, 0.06, 1.0),
-			18.0 + float(i) * 2.2,
-			17.0 + float(i) * 2.0
-		)
-		if i < 5:
-			await _sleep(0.035)
-	var end := (owner_ground + IsoVfx.ground_vector(base_direction, 236.0)).round()
-	_pulse_ring(end, 42.0, Color(3.6, 2.65, 0.9, 1.0), Color(1.8, 0.45, 0.08, 0.28), 0.20, 32)
 
-# M1 PRIMARY: PLASMA CLEAVER
-# A travelling isometric plasma crescent that cuts forward through crowds.
+	await _m1_plasma_ram_pass(
+		target_data["position"],
+		86.0,
+		46.0,
+		30.0,
+		0.26,
+		Color(3.6, 2.2, 0.72, 1.0),
+		Color(1.7, 0.42, 0.08, 1.0),
+		true
+	)
+
+	var center: Vector2 = target_data["position"]
+	for i in range(8):
+		var angle := TAU * float(i) / 8.0
+		var tile_at := IsoVfx.ground_point(
+			center,
+			angle,
+			34.0
+		).round()
+		_m1_stamp_compression_tile(
+			tile_at,
+			Vector2.from_angle(angle),
+			32.0,
+			Color(3.6, 2.35, 0.82, 1.0),
+			Color(1.8, 0.45, 0.08, 1.0),
+			0.28
+		)
+
+	_radial_hit(center, 48.0, true)
+	_explode(
+		center,
+		Color(3.7, 2.35, 0.82, 1.0),
+		Color(1.8, 0.45, 0.08, 1.0),
+		42.0,
+		46.0
+	)
+
+# M1 PRIMARY: PLASMA RAM
+# ATLAS projects a heavy, solid energy wedge toward the enemy nearest the cursor.
+# Tier growth increases physical scale first, then adds follow-up rams at T2/T3.
 func _m1_plasma_cleaver() -> void:
 	var tier := primary_tier
 	var base_direction := direction
+
 	match legendary_mutation:
 		"omega_edge":
 			await _m1_legendary_omega_edge(base_direction)
 			return
+
 		"atlas_crown":
 			await _m1_legendary_atlas_crown(base_direction)
 			return
+
 		"world_breaker":
 			await _m1_legendary_world_breaker(base_direction)
 			return
 
-	# Start almost directly in front of Atlas instead of spawning the blade
-	# at its maximum range.
-	var start_radius := 22.0
+	var max_range := 158.0 + float(tier) * 15.0
+	var fallback := _target_clamped(max_range)
+	var excluded_ids: Dictionary = {}
 
-	# Each upgrade gives the weapon noticeably more forward reach.
-	var end_radius := 132.0 + float(tier) * 14.0
-
-	var start_half_angle := deg_to_rad(
-		27.0 + float(tier) * 2.0
+	var first_target: Dictionary = _m1_pick_ram_target(
+		fallback,
+		62.0 + float(tier) * 7.0,
+		max_range + 34.0,
+		excluded_ids
 	)
 
-	var end_half_angle := deg_to_rad(
-		36.0 + float(tier) * 5.0
-	)
+	var first_position: Vector2 = first_target["position"] as Vector2
 
-	var teeth := 7 + tier * 2
-
-	await _m1_traveling_cleaver_wave(
-		start_radius,
-		end_radius,
-		start_half_angle,
-		end_half_angle,
-		teeth,
-		0.22,
-		9.0 + float(tier),
+	_show_target_lock(
+		first_position,
 		Color(3.0, 1.45, 0.55, 1.0),
-		Color(1.5, 0.42, 0.10, 0.30)
+		Color(1.5, 0.42, 0.10, 1.0)
 	)
 
-	# Tier 2: a hotter, narrower second wave punches farther through
-	# whatever survived the first cleave.
-	if tier >= 2:
-		await _sleep(0.045)
+	await _m1_plasma_ram_pass(
+		first_position,
+		38.0 + float(tier) * 6.0,
+		26.0 + float(tier) * 3.0,
+		15.0 + float(tier) * 2.0,
+		maxf(
+			0.15,
+			0.22 - float(tier) * 0.012
+		),
+		Color(3.0, 1.45, 0.55, 1.0),
+		Color(1.5, 0.42, 0.10, 1.0),
+		false
+	)
 
-		await _m1_traveling_cleaver_wave(
-			28.0,
-			end_radius + 18.0,
-			start_half_angle * 0.82,
-			end_half_angle * 0.88,
-			teeth + 2,
-			0.17,
-			8.0 + float(tier),
-			Color(2.9, 1.05, 0.32, 1.0),
-			Color(1.35, 0.30, 0.07, 0.28)
+	# Tier 2 gains a second shoulder ram into a nearby target.
+	# The lateral fallback makes the upgrade useful even when only
+	# one enemy was close to the cursor.
+	if tier >= 2:
+		await _sleep(0.040)
+
+		var second_fallback: Vector2 = (
+			first_position
+			+ IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				-28.0
+			)
+		).round()
+
+		var second_target: Dictionary = _m1_pick_ram_target(
+			second_fallback,
+			56.0,
+			max_range + 44.0,
+			excluded_ids
 		)
 
-	# Tier 3: a larger overcharged echo follows the attack and opens the
-	# cleaver into a much stronger crowd-clearing weapon.
-	if tier >= 3:
-		await _sleep(0.04)
+		var second_position: Vector2 = second_target["position"] as Vector2
 
-		await _m1_traveling_cleaver_wave(
+		await _m1_plasma_ram_pass(
+			second_position,
+			34.0 + float(tier) * 4.0,
+			24.0 + float(tier) * 2.0,
+			14.0 + float(tier),
+			0.16,
+			Color(2.95, 1.08, 0.34, 1.0),
+			Color(1.35, 0.30, 0.07, 1.0),
+			false
+		)
+
+	# Tier 3 finishes with an overcharged center mass:
+	# wider, taller, and slightly slower so it feels materially
+	# heavier than the first two passes.
+	if tier >= 3:
+		await _sleep(0.035)
+
+		var third_fallback: Vector2 = (
+			first_position
+			+ IsoVfx.ground_perpendicular_offset(
+				base_direction,
+				30.0
+			)
+		).round()
+
+		var third_target: Dictionary = _m1_pick_ram_target(
+			third_fallback,
+			62.0,
+			max_range + 48.0,
+			excluded_ids
+		)
+
+		var third_position: Vector2 = third_target["position"] as Vector2
+
+		await _m1_plasma_ram_pass(
+			third_position,
+			58.0,
 			34.0,
-			end_radius + 32.0,
-			start_half_angle,
-			end_half_angle * 1.18,
-			teeth + 4,
+			23.0,
 			0.18,
-			9.0,
 			Color(3.2, 2.0, 0.8, 1.0),
-			Color(1.6, 0.5, 0.10, 0.30)
+			Color(1.6, 0.5, 0.10, 1.0),
+			true
 		)
 		
 # M1 SECONDARY: REPULSOR BURST
